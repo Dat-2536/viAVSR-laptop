@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environments
+.venv/
+venv/
+env/
+.conda/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Model files
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+
+# Data / generated media
+data/
+datasets/
+recordings/
+*.wav
+*.flac
+*.mp3
+*.mp4
+*.webm
+*.avi
+
+# Outputs
+outputs/*
+!outputs/.gitkeep
+
+# Model caches
+.cache/
+hf_cache/
+model-bin/
+
+# Tokenizer binaries
+assets/tokenizers/vi/*.model
+assets/tokenizers/vi/*_units.txt
+!assets/tokenizers/vi/README.md
