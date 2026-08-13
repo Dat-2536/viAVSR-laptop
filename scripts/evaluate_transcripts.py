@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from viasvr.evaluation import evaluate_transcript
+from viavsr.evaluation import evaluate_transcript
 
 
 def build_parser() -> argparse.ArgumentParser:
