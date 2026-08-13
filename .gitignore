@@ -7,11 +7,21 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Python packaging/build artifacts
+build/
+dist/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+
 # Environments
 .venv/
 venv/
 env/
 .conda/
+
 
 # IDE / OS
 .vscode/
@@ -19,22 +29,28 @@ env/
 .DS_Store
 Thumbs.db
 
+
 # Secrets
 .env
 .env.*
 !.env.example
 
-# Model files
+
+# Model files / checkpoints
 *.pt
 *.pth
 *.ckpt
 *.safetensors
 *.onnx
 
+checkpoints/
+
+
 # Data / generated media
 data/
 datasets/
 recordings/
+
 *.wav
 *.flac
 *.mp3
@@ -42,14 +58,28 @@ recordings/
 *.webm
 *.avi
 
-# Outputs
+
+# Outputs / runtime artifacts
 outputs/*
 !outputs/.gitkeep
 
-# Model caches
+logs/
+*.log
+tmp/
+temp/
+
+
+# ML experiment tracking
+wandb/
+runs/
+mlruns/
+
+
+# Model / library caches
 .cache/
 hf_cache/
 model-bin/
+
 
 # Tokenizer binaries
 assets/tokenizers/vi/*.model

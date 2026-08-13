@@ -1,6 +1,6 @@
 import pytest
 
-from viasvr.evaluation import evaluate_transcript
+from viavsr.evaluation import evaluate_transcript
 
 
 @pytest.mark.skip(reason="VIASVR-6 skeleton: implement WER/CER first.")

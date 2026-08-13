@@ -1,7 +1,7 @@
 import unicodedata
 import pytest
 
-from viasvr.evaluation import normalize_vietnamese_text
+from viavsr.evaluation import normalize_vietnamese_text
 
 
 def test_normalization_lowercases_and_collapses_whitespace():
