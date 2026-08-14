@@ -8,7 +8,6 @@ import yaml
 
 from .errors import ConfigurationError
 
-
 DeviceName = Literal["cpu", "cuda"]
 DTypeName = Literal["float32", "float16", "bfloat16"]
 

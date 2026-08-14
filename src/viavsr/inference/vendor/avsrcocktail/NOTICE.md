@@ -9,6 +9,7 @@ were derived from:
 - Upstream license: Creative Commons Attribution-NonCommercial 4.0
 
 Changes in this project are limited to package-relative imports, removal of
-unused model families, replacement of removed NumPy scalar aliases, and a small
-load-only wrapper. Dataset, preprocessing, training, beam-search, and English
-tokenizer code are intentionally excluded.
+unused model families, replacement of removed NumPy scalar aliases,
+modernization of Python type/style syntax, and a small load-only wrapper.
+Dataset, preprocessing, training, beam-search, and English tokenizer code are
+intentionally excluded.

@@ -1,7 +1,7 @@
 """Scorer interface module."""
 
 import warnings
-from typing import Any, List, Tuple
+from typing import Any
 
 import torch
 
@@ -35,7 +35,7 @@ class ScorerInterface:
         """
         return None
 
-    def select_state(self, state: Any, i: int, new_id: int = None) -> Any:
+    def select_state(self, state: Any, i: int, new_id: int | None = None) -> Any:
         """Select state with relative ids in the main beam search.
 
         Args:
@@ -51,7 +51,7 @@ class ScorerInterface:
 
     def score(
         self, y: torch.Tensor, state: Any, x: torch.Tensor
-    ) -> Tuple[torch.Tensor, Any]:
+    ) -> tuple[torch.Tensor, Any]:
         """Score new token (required).
 
         Args:
@@ -95,8 +95,8 @@ class BatchScorerInterface(ScorerInterface):
         return self.init_state(x)
 
     def batch_score(
-        self, ys: torch.Tensor, states: List[Any], xs: torch.Tensor
-    ) -> Tuple[torch.Tensor, List[Any]]:
+        self, ys: torch.Tensor, states: list[Any], xs: torch.Tensor
+    ) -> tuple[torch.Tensor, list[Any]]:
         """Score new token batch (required).
 
         Args:
@@ -112,12 +112,11 @@ class BatchScorerInterface(ScorerInterface):
 
         """
         warnings.warn(
-            "{} batch score is implemented through for loop not parallelized".format(
-                self.__class__.__name__
-            )
+            f"{self.__class__.__name__} batch score is implemented "
+            "through for loop not parallelized"
         )
-        scores = list()
-        outstates = list()
+        scores = []
+        outstates = []
         for i, (y, state, x) in enumerate(zip(ys, states, xs)):
             score, outstate = self.score(y, state, x)
             outstates.append(outstate)
@@ -141,7 +140,7 @@ class PartialScorerInterface(ScorerInterface):
 
     def score_partial(
         self, y: torch.Tensor, next_tokens: torch.Tensor, state: Any, x: torch.Tensor
-    ) -> Tuple[torch.Tensor, Any]:
+    ) -> tuple[torch.Tensor, Any]:
         """Score new token (required).
 
         Args:
@@ -166,9 +165,9 @@ class BatchPartialScorerInterface(BatchScorerInterface, PartialScorerInterface):
         self,
         ys: torch.Tensor,
         next_tokens: torch.Tensor,
-        states: List[Any],
+        states: list[Any],
         xs: torch.Tensor,
-    ) -> Tuple[torch.Tensor, Any]:
+    ) -> tuple[torch.Tensor, Any]:
         """Score new token (required).
 
         Args:
