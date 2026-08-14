@@ -1,0 +1,1 @@
+"""Vendored AVSRCocktail decoder components."""

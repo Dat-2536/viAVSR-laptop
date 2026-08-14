@@ -1,0 +1,14 @@
+{
+  "repository": "nguyenvulebinh/viCocktail",
+  "revision": "ad644a77e8e3177aa7422510302c11de5282fa26",
+  "files": {
+    "unigram2048.model": {
+      "url": "https://raw.githubusercontent.com/nguyenvulebinh/viCocktail/ad644a77e8e3177aa7422510302c11de5282fa26/unigram2048.model",
+      "sha256": "21ca39e799b64044d75edccd9016fac0315e64f89bdd43fbd3089607dceb9d64"
+    },
+    "unigram2048_units.txt": {
+      "url": "https://raw.githubusercontent.com/nguyenvulebinh/viCocktail/ad644a77e8e3177aa7422510302c11de5282fa26/unigram2048_units.txt",
+      "sha256": "ea7b25e67a302305ffdb59909419c08822b3607a6b03871adef2bcb9f6ebec25"
+    }
+  }
+}
