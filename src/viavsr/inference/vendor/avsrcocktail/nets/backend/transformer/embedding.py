@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 # Copyright 2019 Shigeki Karita
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
@@ -43,7 +42,7 @@ class PositionalEncoding(torch.nn.Module):
 
     def __init__(self, d_model, dropout_rate, max_len=5000, reverse=False):
         """Construct an PositionalEncoding object."""
-        super(PositionalEncoding, self).__init__()
+        super().__init__()
         self.d_model = d_model
         self.reverse = reverse
         self.xscale = math.sqrt(self.d_model)
@@ -54,11 +53,10 @@ class PositionalEncoding(torch.nn.Module):
 
     def extend_pe(self, x):
         """Reset the positional encodings."""
-        if self.pe is not None:
-            if self.pe.size(1) >= x.size(1):
-                if self.pe.dtype != x.dtype or self.pe.device != x.device:
-                    self.pe = self.pe.to(dtype=x.dtype, device=x.device)
-                return
+        if self.pe is not None and self.pe.size(1) >= x.size(1):
+            if self.pe.dtype != x.dtype or self.pe.device != x.device:
+                self.pe = self.pe.to(dtype=x.dtype, device=x.device)
+            return
         pe = torch.zeros(x.size(1), self.d_model)
         if self.reverse:
             position = torch.arange(
@@ -162,7 +160,7 @@ class RelPositionalEncoding(torch.nn.Module):
 
     def __init__(self, d_model, dropout_rate, max_len=5000):
         """Construct an PositionalEncoding object."""
-        super(RelPositionalEncoding, self).__init__()
+        super().__init__()
         self.d_model = d_model
         self.xscale = math.sqrt(self.d_model)
         self.dropout = torch.nn.Dropout(p=dropout_rate)
@@ -171,13 +169,12 @@ class RelPositionalEncoding(torch.nn.Module):
 
     def extend_pe(self, x):
         """Reset the positional encodings."""
-        if self.pe is not None:
-            # self.pe contains both positive and negative parts
-            # the length of self.pe is 2 * input_len - 1
-            if self.pe.size(1) >= x.size(1) * 2 - 1:
-                if self.pe.dtype != x.dtype or self.pe.device != x.device:
-                    self.pe = self.pe.to(dtype=x.dtype, device=x.device)
-                return
+        # self.pe contains both positive and negative parts and has a length of
+        # 2 * input_len - 1.
+        if self.pe is not None and self.pe.size(1) >= x.size(1) * 2 - 1:
+            if self.pe.dtype != x.dtype or self.pe.device != x.device:
+                self.pe = self.pe.to(dtype=x.dtype, device=x.device)
+            return
         # Suppose `i` means to the position of query vecotr and `j` means the
         # position of key vector. We use position relative positions when keys
         # are to the left (i>j) and negative relative positions otherwise (i<j).

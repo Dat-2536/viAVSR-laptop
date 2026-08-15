@@ -1,26 +1,39 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 # Copyright 2019 Shigeki Karita
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
 
 """Decoder definition."""
 
-from typing import Any, List, Tuple
+from typing import Any
 
 import torch
 
-from viavsr.inference.vendor.avsrcocktail.nets.backend.nets_utils import rename_state_dict
-from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.attention import MultiHeadedAttention
-from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.decoder_layer import DecoderLayer
-from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.embedding import PositionalEncoding
-from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.layer_norm import LayerNorm
-from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.mask import subsequent_mask
+from viavsr.inference.vendor.avsrcocktail.nets.backend.nets_utils import (
+    rename_state_dict,
+)
+from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.attention import (
+    MultiHeadedAttention,
+)
+from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.decoder_layer import (
+    DecoderLayer,
+)
+from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.embedding import (
+    PositionalEncoding,
+)
+from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.layer_norm import (
+    LayerNorm,
+)
+from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.mask import (
+    subsequent_mask,
+)
 from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.positionwise_feed_forward import (
     PositionwiseFeedForward,  # noqa: H301
 )
 from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.repeat import repeat
-from viavsr.inference.vendor.avsrcocktail.nets.scorer_interface import BatchScorerInterface
+from viavsr.inference.vendor.avsrcocktail.nets.scorer_interface import (
+    BatchScorerInterface,
+)
 
 
 def _pre_hook(
@@ -193,8 +206,8 @@ class Decoder(BatchScorerInterface, torch.nn.Module):
 
     # batch beam search API (see BatchScorerInterface)
     def batch_score(
-        self, ys: torch.Tensor, states: List[Any], xs: torch.Tensor
-    ) -> Tuple[torch.Tensor, List[Any]]:
+        self, ys: torch.Tensor, states: list[Any], xs: torch.Tensor
+    ) -> tuple[torch.Tensor, list[Any]]:
         """Score new token batch (required).
         Args:
             ys (torch.Tensor): torch.int64 prefix tokens (n_batch, ylen).

@@ -3,22 +3,29 @@
 
 """Transformer speech recognition model (pytorch)."""
 
-import logging
-import numpy
 import torch
 
+# from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.encoder import Encoder
+from viavsr.inference.vendor.avsrcocktail.nets.backend.backbones.avhubert import (
+    AVHubertModel,
+)
 from viavsr.inference.vendor.avsrcocktail.nets.backend.ctc import CTC
 from viavsr.inference.vendor.avsrcocktail.nets.backend.nets_utils import (
     make_non_pad_mask,
     th_accuracy,
 )
-from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.add_sos_eos import add_sos_eos
-from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.decoder import Decoder
-# from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.encoder import Encoder
-from viavsr.inference.vendor.avsrcocktail.nets.backend.backbones.avhubert import AVHubertModel
-from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.label_smoothing_loss import LabelSmoothingLoss
-from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.mask import target_mask
-from viavsr.inference.vendor.avsrcocktail.nets.backend.nets_utils import MLPHead
+from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.add_sos_eos import (
+    add_sos_eos,
+)
+from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.decoder import (
+    Decoder,
+)
+from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.label_smoothing_loss import (
+    LabelSmoothingLoss,
+)
+from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.mask import (
+    target_mask,
+)
 
 
 class E2E(torch.nn.Module):
@@ -140,7 +147,7 @@ class E2E(torch.nn.Module):
         # x = self.fusion(torch.cat((video_feat, audio_feat), dim=-1))
         x = avhubert_features.last_hidden_state
         # ctc loss
-        loss_ctc, ys_hat = self.ctc(x, video_lengths, label)
+        loss_ctc, _ = self.ctc(x, video_lengths, label)
 
         if self.proj_decoder:
             x = self.proj_decoder(x)

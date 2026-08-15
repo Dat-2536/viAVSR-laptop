@@ -1,12 +1,15 @@
 import logging
-from distutils.version import LooseVersion
+from importlib import import_module
 
 import numpy as np
 import six
 import torch
 import torch.nn.functional as F
+from packaging.version import Version
 
 from viavsr.inference.vendor.avsrcocktail.nets.backend.nets_utils import to_device
+
+logger = logging.getLogger(__name__)
 
 
 class CTC(torch.nn.Module):
@@ -30,12 +33,12 @@ class CTC(torch.nn.Module):
         # In case of Pytorch >= 1.7.0, CTC will be always builtin
         self.ctc_type = (
             ctc_type
-            if LooseVersion(torch.__version__) < LooseVersion("1.7.0")
+            if Version(torch.__version__) < Version("1.7.0")
             else "builtin"
         )
 
         if ctc_type != self.ctc_type:
-            logging.debug(f"CTC was set to {self.ctc_type} due to PyTorch version.")
+            logger.debug("CTC was set to %s due to PyTorch version.", self.ctc_type)
 
         if self.ctc_type == "builtin":
             reduction_type = "sum" if reduce else "none"
@@ -46,16 +49,18 @@ class CTC(torch.nn.Module):
             reduction_type = "sum" if reduce else "none"
             self.ctc_loss = torch.nn.CTCLoss(reduction=reduction_type)
         elif self.ctc_type == "warpctc":
-            import warpctc_pytorch as warp_ctc
+            warp_ctc = import_module("warpctc_pytorch")
 
             self.ctc_loss = warp_ctc.CTCLoss(size_average=True, reduce=reduce)
         elif self.ctc_type == "gtnctc":
-            from viavsr.inference.vendor.avsrcocktail.nets.backend.gtn_ctc import GTNCTCLossFunction
+            gtn_ctc = import_module(
+                "viavsr.inference.vendor.avsrcocktail.nets.backend.gtn_ctc"
+            )
 
-            self.ctc_loss = GTNCTCLossFunction.apply
+            self.ctc_loss = gtn_ctc.GTNCTCLossFunction.apply
         else:
             raise ValueError(
-                'ctc_type must be "builtin" or "warpctc": {}'.format(self.ctc_type)
+                f'ctc_type must be "builtin" or "warpctc": {self.ctc_type}'
             )
 
         self.ignore_id = -1
@@ -367,5 +372,5 @@ def ctc_for(args, odim, reduce=True):
         return ctcs_list
     else:
         raise ValueError(
-            "Number of encoders needs to be more than one. {}".format(num_encs)
+            f"Number of encoders needs to be more than one. {num_encs}"
         )

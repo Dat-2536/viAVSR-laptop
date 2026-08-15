@@ -1,9 +1,9 @@
-import torch
 import logging
 import math
-import torch.nn as nn
 from collections import OrderedDict
 
+import torch
+from torch import nn
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class BasicBlock(nn.Module):
     expansion = 1
 
     def __init__(self, inplanes, planes, stride=1, downsample=None, relu_type = 'relu' ):
-        super(BasicBlock, self).__init__()
+        super().__init__()
 
         assert relu_type in ['relu','prelu']
 
@@ -45,7 +45,7 @@ class BasicBlock(nn.Module):
             self.relu1 = nn.PReLU(num_parameters=planes)
             self.relu2 = nn.PReLU(num_parameters=planes)
         else:
-            raise Exception('relu type not implemented')
+            raise ValueError('relu type not implemented')
 
         self.conv2 = conv3x3(planes, planes)
         self.bn2 = nn.BatchNorm2d(planes)
@@ -77,7 +77,7 @@ class ResNet(nn.Module):
         self.gamma_zero = gamma_zero
         self.downsample_block = downsample_basic_block_v2 if avg_pool_downsample else downsample_basic_block
 
-        super(ResNet, self).__init__()
+        super().__init__()
         self.layer1 = self._make_layer(block, 64, layers[0])
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
@@ -125,7 +125,7 @@ class ResNet(nn.Module):
 
 class ResEncoder(nn.Module):
     def __init__(self, relu_type, weights):
-        super(ResEncoder, self).__init__()
+        super().__init__()
         self.frontend_nout = 64
         self.backend_out = 512
         frontend_relu = nn.PReLU(num_parameters=self.frontend_nout) if relu_type == 'prelu' else nn.ReLU()
@@ -149,7 +149,7 @@ class ResEncoder(nn.Module):
             self.trunk.load_state_dict(trunk_std)
 
     def forward(self, x):
-        B, C, T, H, W = x.size()
+        B, _, _, _, _ = x.size()
         x = self.frontend3D(x)
         Tnew = x.shape[2]
         x = self.threeD_to_2D_tensor(x)

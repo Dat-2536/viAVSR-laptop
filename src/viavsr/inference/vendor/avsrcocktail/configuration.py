@@ -1,6 +1,5 @@
 from transformers.configuration_utils import PretrainedConfig
 
-
 # odim=args.odim,
 # attention_dim=args.ddim,
 # attention_heads=args.dheads,
@@ -82,10 +81,10 @@ class AVHubertAVSRConfig(PretrainedConfig):
         contrastive_logits_temperature = 0.1,
         conv_bias = False,
         conv_channels = 1024,
-        conv_dim = [512,512,512,512,512,512,512],
-        conv_kernel = [10,3,3,3,3,2,2],
-        conv_kernel_sizes = [5,5],
-        conv_stride = [5,2,2,2,2,2,2],
+        conv_dim = None,
+        conv_kernel = None,
+        conv_kernel_sizes = None,
+        conv_stride = None,
         ctc_loss_reduction = "sum",
         ctc_zero_infinity = False,
         d_model = 1024,
@@ -180,9 +179,9 @@ class AVHubertAVSRConfig(PretrainedConfig):
         skip_nomask = False,
         sub_encoder_layers = 0,
         target_glu = False,
-        tdnn_dilation = [1,2,3,1,1],
-        tdnn_dim = [512,512,512,512,1500],
-        tdnn_kernel = [5,3,3,1,1],
+        tdnn_dilation = None,
+        tdnn_dim = None,
+        tdnn_kernel = None,
         untie_final_proj = True,
         use_cache = True,
         use_weighted_layer_sum = False,
@@ -260,10 +259,18 @@ class AVHubertAVSRConfig(PretrainedConfig):
         self.contrastive_logits_temperature = contrastive_logits_temperature
         self.conv_bias = conv_bias
         self.conv_channels = conv_channels
-        self.conv_dim = conv_dim
-        self.conv_kernel = conv_kernel
-        self.conv_kernel_sizes = conv_kernel_sizes
-        self.conv_stride = conv_stride
+        self.conv_dim = (
+            [512, 512, 512, 512, 512, 512, 512] if conv_dim is None else conv_dim
+        )
+        self.conv_kernel = (
+            [10, 3, 3, 3, 3, 2, 2] if conv_kernel is None else conv_kernel
+        )
+        self.conv_kernel_sizes = (
+            [5, 5] if conv_kernel_sizes is None else conv_kernel_sizes
+        )
+        self.conv_stride = (
+            [5, 2, 2, 2, 2, 2, 2] if conv_stride is None else conv_stride
+        )
         self.ctc_loss_reduction = ctc_loss_reduction
         self.ctc_zero_infinity = ctc_zero_infinity
         self.d_model = d_model
@@ -358,9 +365,13 @@ class AVHubertAVSRConfig(PretrainedConfig):
         self.skip_nomask = skip_nomask
         self.sub_encoder_layers = sub_encoder_layers
         self.target_glu = target_glu
-        self.tdnn_dilation = tdnn_dilation
-        self.tdnn_dim = tdnn_dim
-        self.tdnn_kernel = tdnn_kernel
+        self.tdnn_dilation = (
+            [1, 2, 3, 1, 1] if tdnn_dilation is None else tdnn_dilation
+        )
+        self.tdnn_dim = (
+            [512, 512, 512, 512, 1500] if tdnn_dim is None else tdnn_dim
+        )
+        self.tdnn_kernel = [5, 3, 3, 1, 1] if tdnn_kernel is None else tdnn_kernel
         self.untie_final_proj = untie_final_proj
         self.use_cache = use_cache
         self.use_weighted_layer_sum = use_weighted_layer_sum

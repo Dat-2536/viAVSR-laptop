@@ -1,12 +1,18 @@
-# -*- coding: utf-8 -*-
 
 """Network related utility tools."""
 
 import logging
-from typing import Dict
+from importlib import import_module
 
 import numpy as np
 import torch
+
+logger = logging.getLogger(__name__)
+
+
+def _complex_tensor_class():
+    """Load the optional torch-complex tensor class when it is needed."""
+    return import_module("torch_complex.tensor").ComplexTensor
 
 
 def to_device(m, x):
@@ -148,11 +154,11 @@ def make_pad_mask(lengths, xs=None, length_dim=-1, maxlen=None):
 
     """
     if length_dim == 0:
-        raise ValueError("length_dim cannot be 0: {}".format(length_dim))
+        raise ValueError(f"length_dim cannot be 0: {length_dim}")
 
     if not isinstance(lengths, list):
         lengths = lengths.tolist()
-    bs = int(len(lengths))
+    bs = len(lengths)
     if maxlen is None:
         if xs is None:
             maxlen = int(max(lengths))
@@ -351,22 +357,15 @@ def to_torch_tensor(x):
     # If numpy, change to torch tensor
     if isinstance(x, np.ndarray):
         if x.dtype.kind == "c":
-            # Dynamically importing because torch_complex requires python3
-            from torch_complex.tensor import ComplexTensor
-
-            return ComplexTensor(x)
+            return _complex_tensor_class()(x)
         else:
             return torch.from_numpy(x)
 
     # If {'real': ..., 'imag': ...}, convert to ComplexTensor
     elif isinstance(x, dict):
-        # Dynamically importing because torch_complex requires python3
-        from torch_complex.tensor import ComplexTensor
-
         if "real" not in x or "imag" not in x:
-            raise ValueError("has 'real' and 'imag' keys: {}".format(list(x)))
-        # Relative importing because of using python3 syntax
-        return ComplexTensor(x["real"], x["imag"])
+            raise ValueError(f"has 'real' and 'imag' keys: {list(x)}")
+        return _complex_tensor_class()(x["real"], x["imag"])
 
     # If torch.Tensor, as it is
     elif isinstance(x, torch.Tensor):
@@ -375,20 +374,16 @@ def to_torch_tensor(x):
     else:
         error = (
             "x must be numpy.ndarray, torch.Tensor or a dict like "
-            "{{'real': torch.Tensor, 'imag': torch.Tensor}}, "
-            "but got {}".format(type(x))
+            "{'real': torch.Tensor, 'imag': torch.Tensor}, "
+            f"but got {type(x)}"
         )
         try:
-            from torch_complex.tensor import ComplexTensor
-        except Exception:
-            # If PY2
-            raise ValueError(error)
-        else:
-            # If PY3
-            if isinstance(x, ComplexTensor):
-                return x
-            else:
-                raise ValueError(error)
+            complex_tensor = _complex_tensor_class()
+        except (ImportError, AttributeError) as exc:
+            raise TypeError(error) from exc
+        if isinstance(x, complex_tensor):
+            return x
+        raise TypeError(error)
 
 
 def get_subsample(train_args, mode, arch):
@@ -408,8 +403,8 @@ def get_subsample(train_args, mode, arch):
     elif mode == "mt" and arch == "rnn":
         # +1 means input (+1) and layers outputs (train_args.elayer)
         subsample = np.ones(train_args.elayers + 1, dtype=int)
-        logging.warning("Subsampling is not performed for machine translation.")
-        logging.info("subsample: " + " ".join([str(x) for x in subsample]))
+        logger.warning("Subsampling is not performed for machine translation.")
+        logger.info("subsample: " + " ".join([str(x) for x in subsample]))
         return subsample
 
     elif (
@@ -423,11 +418,11 @@ def get_subsample(train_args, mode, arch):
             for j in range(min(train_args.elayers + 1, len(ss))):
                 subsample[j] = int(ss[j])
         else:
-            logging.warning(
+            logger.warning(
                 "Subsampling is not performed for vgg*. "
                 "It is performed in max pooling layers at CNN."
             )
-        logging.info("subsample: " + " ".join([str(x) for x in subsample]))
+        logger.info("subsample: " + " ".join([str(x) for x in subsample]))
         return subsample
 
     elif mode == "asr" and arch == "rnn_mix":
@@ -441,11 +436,11 @@ def get_subsample(train_args, mode, arch):
             ):
                 subsample[j] = int(ss[j])
         else:
-            logging.warning(
+            logger.warning(
                 "Subsampling is not performed for vgg*. "
                 "It is performed in max pooling layers at CNN."
             )
-        logging.info("subsample: " + " ".join([str(x) for x in subsample]))
+        logger.info("subsample: " + " ".join([str(x) for x in subsample]))
         return subsample
 
     elif mode == "asr" and arch == "rnn_mulenc":
@@ -459,27 +454,27 @@ def get_subsample(train_args, mode, arch):
                 for j in range(min(train_args.elayers[idx] + 1, len(ss))):
                     subsample[j] = int(ss[j])
             else:
-                logging.warning(
+                logger.warning(
                     "Encoder %d: Subsampling is not performed for vgg*. "
                     "It is performed in max pooling layers at CNN.",
                     idx + 1,
                 )
-            logging.info("subsample: " + " ".join([str(x) for x in subsample]))
+            logger.info("subsample: " + " ".join([str(x) for x in subsample]))
             subsample_list.append(subsample)
         return subsample_list
 
     else:
-        raise ValueError("Invalid options: mode={}, arch={}".format(mode, arch))
+        raise ValueError(f"Invalid options: mode={mode}, arch={arch}")
 
 
 def rename_state_dict(
-    old_prefix: str, new_prefix: str, state_dict: Dict[str, torch.Tensor]
+    old_prefix: str, new_prefix: str, state_dict: dict[str, torch.Tensor]
 ):
     """Replace keys of old prefix with new prefix in state dict."""
     # need this list not to break the dict iterator
     old_keys = [k for k in state_dict if k.startswith(old_prefix)]
     if len(old_keys) > 0:
-        logging.warning(f"Rename: {old_prefix} -> {new_prefix}")
+        logger.warning("Rename: %s -> %s", old_prefix, new_prefix)
     for k in old_keys:
         v = state_dict.pop(k)
         new_k = k.replace(old_prefix, new_prefix)
@@ -488,15 +483,16 @@ def rename_state_dict(
 
 def get_activation(act):
     """Return activation function."""
-    # Lazy load to avoid unused import
-    from viavsr.inference.vendor.avsrcocktail.nets.backend.conformer.swish import Swish
+    swish = import_module(
+        "viavsr.inference.vendor.avsrcocktail.nets.backend.conformer.swish"
+    ).Swish
 
     activation_funcs = {
         "hardtanh": torch.nn.Hardtanh,
         "tanh": torch.nn.Tanh,
         "relu": torch.nn.ReLU,
         "selu": torch.nn.SELU,
-        "swish": Swish,
+        "swish": swish,
     }
 
     return activation_funcs[act]()
@@ -504,7 +500,7 @@ def get_activation(act):
 
 class MLPHead(torch.nn.Module):
     def __init__(self, idim, hdim, odim, norm="batchnorm"):
-        super(MLPHead, self).__init__()
+        super().__init__()
         self.norm = norm
 
         self.fc1 = torch.nn.Linear(idim, hdim)

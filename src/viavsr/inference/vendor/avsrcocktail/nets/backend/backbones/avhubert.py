@@ -1,15 +1,20 @@
-import torch
-import numpy as np
-from torch import nn
-from typing import Dict, List, Optional, Tuple, Any
-from transformers import PreTrainedModel, Wav2Vec2Config
-from transformers.models.wav2vec2.modeling_wav2vec2 import (
-    Wav2Vec2Encoder, Wav2Vec2EncoderLayer, 
-    is_deepspeed_zero3_enabled
-)
 from copy import deepcopy
+
+import numpy as np
+import torch
+from torch import nn
+from transformers import PreTrainedModel, Wav2Vec2Config
 from transformers.modeling_outputs import BaseModelOutput
-from viavsr.inference.vendor.avsrcocktail.nets.backend.backbones.resnet import ResEncoder
+from transformers.models.wav2vec2.modeling_wav2vec2 import (
+    Wav2Vec2Encoder,
+    Wav2Vec2EncoderLayer,
+    is_deepspeed_zero3_enabled,
+)
+
+from viavsr.inference.vendor.avsrcocktail.nets.backend.backbones.resnet import (
+    ResEncoder,
+)
+
 
 def find_runs(x):
     """Find runs of consecutive items in an array."""
@@ -41,8 +46,8 @@ def find_runs(x):
 
 
 def compute_mask_indices(
-    shape: Tuple[int, int],
-    padding_mask: Optional[torch.Tensor],
+    shape: tuple[int, int],
+    padding_mask: torch.Tensor | None,
     mask_prob: float,
     mask_length: int,
     mask_type: str = "static",
@@ -101,12 +106,12 @@ def compute_mask_indices(
             lengths = np.random.randint(mask_other, mask_length * 2 + 1, size=num_mask)
         elif mask_type == "normal":
             lengths = np.random.normal(mask_length, mask_other, size=num_mask)
-            lengths = [max(1, int(round(x))) for x in lengths]
+            lengths = [max(1, round(x)) for x in lengths]
         elif mask_type == "poisson":
             lengths = np.random.poisson(mask_length, size=num_mask)
-            lengths = [int(round(x)) for x in lengths]
+            lengths = [round(x) for x in lengths]
         else:
-            raise Exception("unknown mask selection " + mask_type)
+            raise ValueError("unknown mask selection " + mask_type)
 
         if sum(lengths) == 0:
             lengths[0] = min(mask_length, sz - 1)
@@ -114,7 +119,7 @@ def compute_mask_indices(
         if no_overlap:
             mask_idc = []
 
-            def arrange(s, e, length, keep_length):
+            def arrange(s, e, length, keep_length, mask_idc):
                 span_start = np.random.randint(s, e - length)
                 mask_idc.extend(span_start + i for i in range(length))
 
@@ -138,7 +143,7 @@ def compute_mask_indices(
                 probs = lens / np.sum(lens)
                 c = np.random.choice(len(parts), p=probs)
                 s, e = parts.pop(c)
-                parts.extend(arrange(s, e, length, min_length))
+                parts.extend(arrange(s, e, length, min_length, mask_idc))
             mask_idc = np.asarray(mask_idc)
         else:
             min_len = min(lengths)
@@ -297,8 +302,8 @@ class AVHubertModel(PreTrainedModel):
         return state_dict
 
     def apply_input_mask(self, x, padding_mask, target_list):
-        B, C, T = x.shape[:3]
-        is_audio = True if len(x.shape) == 3 else False
+        B, _, T = x.shape[:3]
+        is_audio = len(x.shape) == 3
         if is_audio:
             mask_prob, mask_length = self.mask_prob_audio, self.mask_length_audio
         else:
@@ -316,7 +321,6 @@ class AVHubertModel(PreTrainedModel):
                 no_overlap=self.no_mask_overlap,
                 min_space=self.mask_min_space,
             )
-            mask_indices_np = mask_indices
             mask_indices = torch.from_numpy(mask_indices).to(x.device)
             x = x.transpose(1, 2).contiguous() # [B, T, C, H, W]
             if B == 1:
@@ -352,7 +356,7 @@ class AVHubertModel(PreTrainedModel):
 
     def apply_feature_mask(self, x, padding_mask, target_list):
         B, T, C = x.shape
-        assert self.mask_prob_audio == self.mask_prob_image and self.mask_length_audio == self.mask_length_image, f"masking prob/length for image/audio be same for feature masking"
+        assert self.mask_prob_audio == self.mask_prob_image and self.mask_length_audio == self.mask_length_image, "masking prob/length for image/audio be same for feature masking"
         mask_prob, mask_length = self.mask_prob_audio, self.mask_length_image
         if mask_prob > 0:
             mask_indices, _, _, _ = compute_mask_indices(
@@ -404,8 +408,8 @@ class AVHubertModel(PreTrainedModel):
         return features
 
     def forward_targets(
-            self, features: torch.Tensor, mask_indices: torch.Tensor, target_list: List[torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+            self, features: torch.Tensor, mask_indices: torch.Tensor, target_list: list[torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         # Trim features to ensure labels exist and then get aligned labels
         feat_tsz = features.size(2)
         targ_tsz = min([t.size(1) for t in target_list])
@@ -448,13 +452,13 @@ class AVHubertModel(PreTrainedModel):
     def forward_gen(
         self,
         source: torch.Tensor,
-        target_list: Optional[List[torch.Tensor]] = None,
-        padding_mask: Optional[torch.Tensor] = None,
+        target_list: list[torch.Tensor] | None = None,
+        padding_mask: torch.Tensor | None = None,
         mask: bool = True,
         features_only: bool = False,
-        output_layer: Optional[int] = None,
-        video: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
+        output_layer: int | None = None,
+        video: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
         """output layer is 1-based"""
         src_audio, src_video = source['audio'], source['video']
         if mask and self.masking_type == 'input':
@@ -462,7 +466,7 @@ class AVHubertModel(PreTrainedModel):
             src_audio, mask_indices_audio = self.apply_input_mask(src_audio, padding_mask, target_list)
             mask_indices = torch.logical_or(mask_indices_audio, mask_indices_video)
         else:
-            src_audio, src_video, mask_indices = src_audio, src_video, None
+            mask_indices = None
 
         features_audio = self.forward_features(src_audio, modality='audio') # features: [B, F, T]
         features_video = self.forward_features(src_video, modality='video')
@@ -546,10 +550,10 @@ class AVHubertModel(PreTrainedModel):
     def forward(
         self,
         input_features: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         video: torch.Tensor = None,
         **kwargs,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         res = self.forward_gen(
             {"audio": input_features, "video": video},
             padding_mask=attention_mask,
@@ -563,11 +567,11 @@ class AVHubertModel(PreTrainedModel):
     def extract_features(
         self,
         source: torch.Tensor,
-        padding_mask: Optional[torch.Tensor] = None,
+        padding_mask: torch.Tensor | None = None,
         mask: bool = False,
         ret_conv: bool = False,
-        output_layer: Optional[int] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        output_layer: int | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         res = self.forward_gen(
             source,
             padding_mask=padding_mask,
@@ -581,11 +585,8 @@ class AVHubertModel(PreTrainedModel):
     def extract_finetune(self, source, padding_mask=None, mask=False, ret_conv=False, output_layer=None):
         src_audio, src_video = source['audio'], source['video']
         if mask and self.masking_type == 'input':
-            src_video, mask_indices_video = self.apply_input_mask(src_video, padding_mask, target_list=None)
-            src_audio, mask_indices_audio = self.apply_input_mask(src_audio, padding_mask, target_list=None)
-            mask_indices = torch.logical_or(mask_indices_audio, mask_indices_video) # mask_indices not used in fine-tuning
-        else:
-            src_audio, src_video, mask_indices = src_audio, src_video, None
+            src_video, _ = self.apply_input_mask(src_video, padding_mask, target_list=None)
+            src_audio, _ = self.apply_input_mask(src_audio, padding_mask, target_list=None)
 
         if src_audio is not None and src_video is None:
             features_audio = self.forward_features(src_audio, modality='audio') # features: [B, F, T]
@@ -601,7 +602,6 @@ class AVHubertModel(PreTrainedModel):
             features = torch.cat([features_audio, features_video], dim=1)
         elif self.modality_fuse == 'add':
             features = features_audio + features_video
-        features_pen = features.float().pow(2).mean()
 
         features = features.transpose(1, 2)
         features = self.layer_norm(features)
@@ -616,7 +616,6 @@ class AVHubertModel(PreTrainedModel):
         features = self.dropout_input(features)
         unmasked_features = self.dropout_features(unmasked_features)
         x = features
-        mask_indices = None
 
         # feature: (B, T, D), float
         # target: (B, T), long
@@ -672,7 +671,7 @@ class AVHubertEncoder(Wav2Vec2Encoder):
     def forward(
         self,
         hidden_states: torch.tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
         return_dict: bool = True,
@@ -709,7 +708,9 @@ class AVHubertEncoder(Wav2Vec2Encoder):
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
             dropout_probability = torch.rand([])
 
-            skip_the_layer = True if self.training and (dropout_probability < self.config.layerdrop) else False
+            skip_the_layer = bool(
+                self.training and dropout_probability < self.config.layerdrop
+            )
             if not skip_the_layer or deepspeed_zero3_is_enabled:
                 # under deepspeed zero3 all gpus must run in sync
                 if self.gradient_checkpointing and self.training:

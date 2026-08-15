@@ -23,7 +23,6 @@ from .tokenizer import (
     normalize_tokenizer_text,
 )
 
-
 MODEL_IMPLEMENTATION_REVISION = "51107b66864c42687638a00df8dd398ec9210872"
 TOKENIZER_REPOSITORY = "nguyenvulebinh/viCocktail"
 SANITY_SENTENCES = (

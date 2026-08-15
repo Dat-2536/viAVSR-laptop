@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 # Copyright 2019 Shigeki Karita
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
@@ -7,9 +6,11 @@
 """Decoder self-attention layer definition."""
 
 import torch
-
-from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.layer_norm import LayerNorm
 from torch import nn
+
+from viavsr.inference.vendor.avsrcocktail.nets.backend.transformer.layer_norm import (
+    LayerNorm,
+)
 
 
 class DecoderLayer(nn.Module):
@@ -40,7 +41,7 @@ class DecoderLayer(nn.Module):
         concat_after=False,
     ):
         """Construct an DecoderLayer object."""
-        super(DecoderLayer, self).__init__()
+        super().__init__()
         self.size = size
         self.self_attn = self_attn
         self.src_attn = src_attn

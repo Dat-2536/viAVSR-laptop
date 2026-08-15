@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "huggingface-hub==0.32.4",
     "numpy>=1.26,<3",
+    "packaging>=23",
     "PyYAML==6.0.2",
     "sentencepiece==0.2.0",
     "six==1.17.0",

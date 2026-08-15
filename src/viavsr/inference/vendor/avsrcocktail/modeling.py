@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 from transformers.modeling_utils import PreTrainedModel
@@ -13,10 +12,10 @@ from .nets.backend.e2e_asr_avhubert import E2E
 
 @dataclass
 class AVHubertAVSROutput(ModelOutput):
-    loss: Optional[torch.FloatTensor] = None
-    loss_ctc: Optional[torch.FloatTensor] = None
-    loss_att: Optional[torch.FloatTensor] = None
-    acc: Optional[torch.FloatTensor] = None
+    loss: torch.FloatTensor | None = None
+    loss_ctc: torch.FloatTensor | None = None
+    loss_att: torch.FloatTensor | None = None
+    acc: torch.FloatTensor | None = None
 
 
 class AVHubertAVSR(PreTrainedModel):

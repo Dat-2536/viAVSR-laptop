@@ -7,7 +7,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-
 _BEARER_RE = re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]+")
 
 

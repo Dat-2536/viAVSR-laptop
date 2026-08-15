@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 # Copyright 2019 Shigeki Karita
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
@@ -26,11 +25,13 @@ class LabelSmoothingLoss(nn.Module):
         padding_idx,
         smoothing,
         normalize_length=False,
-        criterion=nn.KLDivLoss(reduction="none"),
+        criterion=None,
     ):
         """Construct an LabelSmoothingLoss object."""
-        super(LabelSmoothingLoss, self).__init__()
-        self.criterion = criterion
+        super().__init__()
+        self.criterion = (
+            nn.KLDivLoss(reduction="none") if criterion is None else criterion
+        )
         self.padding_idx = padding_idx
         self.confidence = 1.0 - smoothing
         self.smoothing = smoothing

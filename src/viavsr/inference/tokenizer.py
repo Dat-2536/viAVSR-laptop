@@ -3,13 +3,12 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 import sentencepiece as spm
 
 from .errors import TokenizerAssetError
-
 
 TOKENIZER_MODEL_SHA256 = "21ca39e799b64044d75edccd9016fac0315e64f89bdd43fbd3089607dceb9d64"
 TOKENIZER_UNITS_SHA256 = "ea7b25e67a302305ffdb59909419c08822b3607a6b03871adef2bcb9f6ebec25"
