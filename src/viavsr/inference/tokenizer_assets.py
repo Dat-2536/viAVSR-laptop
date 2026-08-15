@@ -15,7 +15,6 @@ from .tokenizer import (
     sha256_file,
 )
 
-
 _RAW_ROOT = (
     "https://raw.githubusercontent.com/nguyenvulebinh/viCocktail/"
     f"{TOKENIZER_REVISION}"
