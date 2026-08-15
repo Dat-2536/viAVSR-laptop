@@ -9,4 +9,4 @@ dependencies:
   - pip
   - ffmpeg
   - pip:
-      - -e .[dev]
+      - -e ..[dev]

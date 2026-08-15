@@ -156,7 +156,11 @@ def run_tokenizer_sanity_checks(
 
 def _validate_model_placement(model: Any, device: torch.device, dtype: torch.dtype) -> None:
     parameters = list(model.parameters())
-    misplaced = [parameter.device for parameter in parameters if parameter.device != device]
+    misplaced = [
+        parameter.device
+        for parameter in parameters
+        if parameter.device.type != device.type
+    ]
     if misplaced:
         raise ModelAssetsError(
             f"Model parameters were not all placed on {device}.", stage="model"

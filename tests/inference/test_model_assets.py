@@ -7,6 +7,7 @@ import torch
 from viavsr.inference.config import ModelAssetsConfig
 from viavsr.inference.errors import DeviceUnavailableError, VocabularyMismatchError
 from viavsr.inference.model_assets import (
+    _validate_model_placement,
     collect_vocabulary_dimensions,
     load_vietnamese_avsr_assets,
     run_tokenizer_sanity_checks,
@@ -104,6 +105,17 @@ def test_load_passes_pinned_arguments_and_sets_eval(tmp_path: Path, monkeypatch)
     assert assets.model.training is False
     assert next(assets.model.parameters()).device.type == "cpu"
     assert assets.report.vocabulary_compatible is True
+
+
+def test_cuda_device_without_index_accepts_cuda_zero_parameter():
+    parameter = SimpleNamespace(
+        device=torch.device("cuda:0"),
+        dtype=torch.float32,
+        is_floating_point=lambda: True,
+    )
+    model = SimpleNamespace(parameters=lambda: [parameter], training=False)
+
+    _validate_model_placement(model, torch.device("cuda"), torch.float32)
 
 
 @pytest.mark.parametrize(
