@@ -1,0 +1,8 @@
+{
+  "sample_id": "vXTFUuFiXWI_00001_000000_1_-1.00",
+  "split": "train",
+  "duration_sec": 8.576,
+  "sample_rate": 16000,
+  "audio_path": "0000000003/audio.wav",
+  "text_path": "0000000003/text.txt"
+}
