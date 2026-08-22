@@ -19,3 +19,29 @@ CUDA is unavailable. Change `model.device` to `cpu` for an intentional CPU run.
 
 Reports and logs are generated under `outputs/model_assets/`. Model caches,
 tokenizer binaries, reports, and logs are ignored by Git.
+
+## VIAVSR-6 transcript evaluation
+
+Evaluate a raw Vietnamese AVSR prediction against its reference transcript:
+
+```bash
+python scripts/evaluate_transcripts.py \
+  --reference-text "hôm nay trời đẹp" \
+  --prediction-text "hôm nay trời lạnh" \
+  --output outputs/evaluation/metrics.json
+```
+
+The command prints a JSON result and optionally writes the same payload to
+`--output`. It reports WER, CER, word/character edit counts, and normalized
+reference lengths.
+
+Sprint 1 normalization:
+
+- Unicode NFC normalization
+- lowercase
+- selected punctuation replaced by spaces
+- repeated whitespace collapsed
+- Vietnamese diacritics preserved
+
+An empty normalized reference and prediction have zero error. A non-empty
+prediction for an empty reference is reported as insertion errors.

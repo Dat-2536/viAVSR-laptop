@@ -1,7 +1,6 @@
 import re
 import unicodedata
 
-
 _WHITESPACE_RE = re.compile(r"\s+")
 _PUNCTUATION_TO_SPACE_RE = re.compile(r"""[.,!?;:"'()\[\]{}…“”‘’\-–—/\\]+""")
 
