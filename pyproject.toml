@@ -16,6 +16,9 @@ dependencies = [
     "six==1.17.0",
     "torch==2.7.1",
     "transformers==4.52.4",
+    "soundfile==0.8.0",
+    "datasets==5.0.1",
+    "av==18.1.0",
 ]
 
 [project.optional-dependencies]

@@ -58,7 +58,7 @@ recordings/
 *.mp4
 *.webm
 *.avi
-
+*.npy
 
 # Outputs / runtime artifacts
 outputs/*
