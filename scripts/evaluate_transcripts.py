@@ -16,8 +16,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Evaluate Vietnamese AVSR predictions with WER/CER."
     )
-    parser.add_argument("--reference-text", type=str)
-    parser.add_argument("--prediction-text", type=str)
+    parser.add_argument("--reference-text", required=True, type=str)
+    parser.add_argument("--prediction-text", required=True, type=str)
     parser.add_argument(
         "--output",
         type=Path,
@@ -29,12 +29,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-
-    if args.reference_text is None or args.prediction_text is None:
-        raise SystemExit(
-            "Provide both --reference-text and --prediction-text."
-        )
-
     result = evaluate_transcript(
         reference=args.reference_text,
         prediction=args.prediction_text,

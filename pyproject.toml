@@ -19,9 +19,7 @@ dependencies = [
     "soundfile==0.8.0",
     "datasets==5.0.1",
     "av==18.1.0",
-
-
-    "jiwer >= 4.0",
+    "jiwer>=4.0",
     "fastapi",
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.28.0",

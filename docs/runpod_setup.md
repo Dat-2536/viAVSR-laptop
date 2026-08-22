@@ -90,7 +90,7 @@ python -m pytest -q
 Baseline hiện tại đã đúng hết như sau:
 
 ```text
-35 passed, 5 skipped
+49 passed
 ```
 
 nên không được có `failed`, nếu có phải hỏi lại lead.

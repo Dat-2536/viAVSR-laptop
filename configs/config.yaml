@@ -4,7 +4,7 @@ dataset:
   default_split: train
 
 audio:
-  target_sample_rate: 16000   # Hz, chuẩn cho AVSR/ASR
+  target_sample_rate: 16000   # in Hz (standard in AVSR/ASR)
   format: s16
   layout: mono
 

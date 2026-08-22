@@ -1,60 +1,60 @@
+import jiwer
+
 from .schemas import ErrorRateResult
 from .text_normalization import normalize_vietnamese_text
 
-import jiwer
+
+def _error_rate(
+    substitutions: int,
+    deletions: int,
+    insertions: int,
+    reference_length: int,
+) -> float:
+    """Calculate an error rate, including a defined empty-reference policy."""
+    errors = substitutions + deletions + insertions
+    if reference_length == 0:
+        return float(insertions)
+    return errors / reference_length
+
 
 def evaluate_transcript(reference: str, prediction: str) -> ErrorRateResult:
-    """Compute Vietnamese WER/CER for one utterance.
+    """Compute normalized Vietnamese WER/CER for one utterance.
 
-    VIASVR-6 skeleton.
-
-    TODO:
-    1. Normalize reference and prediction.
-    2. Compute word-level substitutions/deletions/insertions.
-    3. Compute character-level substitutions/deletions/insertions.
-    4. Compute WER and CER.
-    5. Define behavior for an empty normalized reference.
-    6. Return ErrorRateResult.
-
-    Recommended library: `jiwer`.
+    Vietnamese diacritics are preserved by normalization. For an empty
+    normalized reference, an empty prediction has zero error; otherwise the
+    rate is the number of inserted words or characters, matching JiWER 4.
     """
-    _reference = normalize_vietnamese_text(reference)
-    _prediction = normalize_vietnamese_text(prediction)
+    normalized_reference = normalize_vietnamese_text(reference)
+    normalized_prediction = normalize_vietnamese_text(prediction)
+    word_result = jiwer.process_words(normalized_reference, normalized_prediction)
+    char_result = jiwer.process_characters(normalized_reference, normalized_prediction)
 
-
-    wer = jiwer.wer(_reference, _prediction)
-    cer = jiwer.cer(_reference, _prediction)
-
-    word_result =  jiwer.process_words(_reference, _prediction)
-    char_result =  jiwer.process_characters(_reference, _prediction)
-
-
+    reference_words = (
+        word_result.hits + word_result.substitutions + word_result.deletions
+    )
+    reference_characters = (
+        char_result.hits + char_result.substitutions + char_result.deletions
+    )
 
     return ErrorRateResult(
-        wer=word_result.wer,
-        cer=char_result.cer,
-
+        wer=_error_rate(
+            word_result.substitutions,
+            word_result.deletions,
+            word_result.insertions,
+            reference_words,
+        ),
+        cer=_error_rate(
+            char_result.substitutions,
+            char_result.deletions,
+            char_result.insertions,
+            reference_characters,
+        ),
         word_substitutions=word_result.substitutions,
         word_deletions=word_result.deletions,
         word_insertions=word_result.insertions,
-
         char_substitutions=char_result.substitutions,
         char_deletions=char_result.deletions,
         char_insertions=char_result.insertions,
-
-        reference_words=(
-            word_result.hits
-            + word_result.substitutions
-            + word_result.deletions
-        ),
-        reference_characters=(
-            char_result.hits
-            + char_result.substitutions
-            + char_result.deletions
-        ),
-    )
-
-
-    raise NotImplementedError(
-        "VIASVR-6 TODO: implement WER/CER and edit-operation counts."
+        reference_words=reference_words,
+        reference_characters=reference_characters,
     )
