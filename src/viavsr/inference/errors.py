@@ -20,3 +20,7 @@ class TokenizerAssetError(ModelAssetsError):
 
 class VocabularyMismatchError(ModelAssetsError):
     """Raised when tokenizer and model output dimensions disagree."""
+
+
+class InferenceError(ModelAssetsError):
+    """Raised when prepared audiovisual inference cannot complete."""

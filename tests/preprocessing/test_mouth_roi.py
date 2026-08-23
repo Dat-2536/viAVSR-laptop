@@ -1,0 +1,134 @@
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from viavsr.preprocessing.errors import MediaInputError
+from viavsr.preprocessing.mouth_roi import (
+    MOUTH_START_INDEX,
+    MOUTH_STOP_INDEX,
+    align_and_crop_mouth_frame,
+    estimate_alignment_transform,
+    load_face_track_artifact,
+    load_mean_face,
+    smooth_landmarks,
+)
+
+
+def test_load_mean_face_returns_official_68_point_geometry() -> None:
+    reference = load_mean_face()
+
+    assert reference.shape == (68, 2)
+    assert reference.dtype == np.float32
+    np.testing.assert_allclose(reference[0], [70.92384, 97.13758], rtol=1e-6)
+    np.testing.assert_allclose(reference[-1], [122.487755, 160.50879], rtol=1e-6)
+
+
+def test_load_mean_face_rejects_invalid_asset(tmp_path) -> None:
+    path = tmp_path / "invalid.json"
+    path.write_text('{"points": [[1, 2]]}', encoding="utf-8")
+
+    with pytest.raises(MediaInputError, match=r"\[68, 2\]"):
+        load_mean_face(path)
+
+
+def test_load_mean_face_wraps_invalid_numeric_data(tmp_path) -> None:
+    path = tmp_path / "invalid.json"
+    path.write_text('{"points": [["not-a-number", 2]]}', encoding="utf-8")
+
+    with pytest.raises(MediaInputError, match="Could not load mean-face asset"):
+        load_mean_face(path)
+
+
+def test_smooth_landmarks_preserves_per_frame_translation() -> None:
+    reference = load_mean_face()
+    translations = np.asarray(
+        [[0.0, 0.0], [2.0, 3.0], [7.0, -1.0], [8.0, 4.0]],
+        dtype=np.float32,
+    )
+    landmarks = reference[None, :, :] + translations[:, None, :]
+
+    result = smooth_landmarks(landmarks, window_size=4)
+
+    np.testing.assert_allclose(result, landmarks, atol=5e-5)
+
+
+def test_estimate_alignment_transform_is_identity_for_reference() -> None:
+    reference = load_mean_face()
+
+    transform = estimate_alignment_transform(reference, reference)
+
+    np.testing.assert_allclose(
+        transform,
+        np.asarray([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32),
+        atol=1e-5,
+    )
+
+
+def test_align_and_crop_mouth_frame_returns_expected_96_square() -> None:
+    reference = load_mean_face()
+    y_coordinates = np.arange(256, dtype=np.uint8)[:, None]
+    grayscale = np.broadcast_to(y_coordinates, (256, 256))
+    frame_rgb = np.repeat(grayscale[:, :, None], 3, axis=2)
+
+    result = align_and_crop_mouth_frame(frame_rgb, reference, reference)
+
+    mouth_center = reference[MOUTH_START_INDEX:MOUTH_STOP_INDEX].mean(axis=0)
+    expected_y_min = round(mouth_center[1]) - 48
+    assert result.shape == (96, 96)
+    assert result.dtype == np.uint8
+    assert result[0, 0] == expected_y_min
+    assert result[-1, -1] == expected_y_min + 95
+
+
+def test_load_face_track_artifact_reads_numeric_arrays(tmp_path) -> None:
+    path = tmp_path / "track.npz"
+    np.savez_compressed(
+        path,
+        landmarks=np.ones((3, 68, 2), dtype=np.float32),
+        detected=np.asarray([True, False, True]),
+        original_resolution=np.asarray([1920, 1080], dtype=np.int32),
+        frame_rate=np.asarray([25], dtype=np.int32),
+    )
+
+    artifact = load_face_track_artifact(path)
+
+    assert artifact.frame_count == 3
+    assert artifact.original_width == 1920
+    assert artifact.original_height == 1080
+    assert artifact.frame_rate == 25
+    assert artifact.detected.tolist() == [True, False, True]
+
+
+@pytest.mark.parametrize(
+    ("landmarks", "detected", "message"),
+    [
+        (
+            np.ones((3, 67, 2), dtype=np.float32),
+            np.ones(3, dtype=np.bool_),
+            "shape",
+        ),
+        (
+            np.ones((3, 68, 2), dtype=np.float32),
+            np.ones(2, dtype=np.bool_),
+            "detection mask",
+        ),
+    ],
+)
+def test_load_face_track_artifact_rejects_invalid_shapes(
+    tmp_path,
+    landmarks,
+    detected,
+    message,
+) -> None:
+    path = tmp_path / "track.npz"
+    np.savez_compressed(
+        path,
+        landmarks=landmarks,
+        detected=detected,
+        original_resolution=np.asarray([1920, 1080], dtype=np.int32),
+        frame_rate=np.asarray([25], dtype=np.int32),
+    )
+
+    with pytest.raises(MediaInputError, match=message):
+        load_face_track_artifact(path)

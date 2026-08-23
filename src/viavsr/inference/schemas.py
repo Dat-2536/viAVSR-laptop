@@ -54,3 +54,21 @@ class LoadedAVSRAssets:
     model: Any
     tokenizer: Any
     report: ModelAssetsReport
+
+
+@dataclass(frozen=True)
+class InferenceResult:
+    transcript: str
+    token_ids: list[int]
+    decoder: Literal["ctc_greedy", "joint_beam_search"]
+    input_video_frames: int
+    encoder_frames: int
+    inference_seconds: float
+    device: str
+    dtype: str
+    beam_size: int | None = None
+    ctc_weight: float | None = None
+    hypothesis_score: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {key: value for key, value in asdict(self).items() if value is not None}

@@ -13,12 +13,16 @@ dependencies = [
     "packaging>=23",
     "PyYAML==6.0.2",
     "sentencepiece==0.2.0",
+    "face-alignment==1.5.0",
     "six==1.17.0",
     "torch==2.7.1",
+    "torchvision==0.22.1",
     "transformers==4.52.4",
     "soundfile==0.8.0",
     "datasets==5.0.1",
     "av==18.1.0",
+    "python_speech_features==0.6",
+    "scipy>=1.11,<2",
     "jiwer>=4.0",
     "fastapi",
     "fastapi>=0.110.0",
@@ -30,6 +34,9 @@ dev = [
     "pytest>=8",
 ]
 
+[tool.ruff]
+extend-exclude = ["src/viavsr/inference/vendor"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
@@ -39,3 +46,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "viavsr.inference.vendor.avsrcocktail" = ["LICENSE", "NOTICE.md"]
+"viavsr.preprocessing" = ["assets/*.json"]
