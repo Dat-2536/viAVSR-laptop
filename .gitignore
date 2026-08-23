@@ -1,21 +1,26 @@
+# Local agent instructions
 AGENTS.md
-# Python
+
+# Python caches and test artifacts
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
+.pyright/
 .ruff_cache/
+.hypothesis/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 
-# Python packaging/build artifacts
+# Python packaging
 build/
 dist/
 *.egg-info/
 
-# Jupyter
+# Notebooks
 .ipynb_checkpoints/
-
 
 # Environments
 .venv/
@@ -23,66 +28,76 @@ venv/
 env/
 .conda/
 
-
-# IDE / OS
+# Editors and operating systems
 .vscode/
 .idea/
+*.swp
+*.swo
 .DS_Store
 Thumbs.db
+desktop.ini
+.Trash-*
+*:Zone.Identifier
 
-
-# Secrets
+# Secrets and local environment files
 .env
 .env.*
 !.env.example
+*.pem
+*.key
 
-
-# Model files / checkpoints
+# Checkpoints and exported models
 *.pt
 *.pth
 *.ckpt
 *.safetensors
 *.onnx
-
+pytorch_model*.bin
 checkpoints/
+model-bin/
 
-
-# Data / generated media
+# Datasets, recordings, and generated media
 data/
 datasets/
 recordings/
-
+samples/webcam/
 *.wav
 *.flac
 *.mp3
+*.m4a
+*.aac
+*.ogg
 *.mp4
 *.webm
 *.avi
+*.mov
+*.mkv
+*.m4v
 *.npy
+*.npz
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
 
-# Outputs / runtime artifacts
+# Runtime outputs
 outputs/*
 !outputs/.gitkeep
-
 logs/
 *.log
 tmp/
 temp/
 
-
-# ML experiment tracking
+# Experiment tracking
 wandb/
 runs/
 mlruns/
 
-
-# Model / library caches
+# Model and library caches
 .cache/
 hf_cache/
-model-bin/
 
-
-# Tokenizer binaries
+# Downloaded tokenizer binaries
 assets/tokenizers/vi/*.model
 assets/tokenizers/vi/*_units.txt
-!assets/tokenizers/vi/README.md

@@ -11,7 +11,6 @@ def build_parser() -> argparse.ArgumentParser:
     """Create the CLI argument parser.
 
     `argparse` is Python's standard-library tool for command-line interfaces.
-    It parses flags such as `--reference-text` into Python values.
     """
     parser = argparse.ArgumentParser(
         description="Evaluate Vietnamese AVSR predictions with WER/CER."

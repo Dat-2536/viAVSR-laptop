@@ -1,0 +1,157 @@
+from types import SimpleNamespace
+
+import pytest
+import torch
+from torch import nn
+
+from viavsr.inference import recognition
+from viavsr.inference.decoding import JointBeamSearchHypothesis
+from viavsr.inference.errors import InferenceError
+from viavsr.inference.recognition import (
+    collapse_ctc_predictions,
+    recognize_prepared_av,
+)
+from viavsr.preprocessing.media import MediaMetadata, PreparedAVInput
+
+
+class _FakeEncoder:
+    def __call__(
+        self, *, input_features: torch.Tensor, video: torch.Tensor
+    ) -> SimpleNamespace:
+        del input_features, video
+        return SimpleNamespace(last_hidden_state=torch.zeros((1, 6, 4)))
+
+
+class _FakeCTC:
+    def log_softmax(self, features: torch.Tensor) -> torch.Tensor:
+        assert features.shape == (1, 6, 4)
+        frame_ids = torch.tensor([0, 2, 2, 0, 2, 3])
+        logits = torch.full((1, 6, 5), -10.0)
+        logits[0, torch.arange(6), frame_ids] = 10.0
+        return logits
+
+
+class _FakeModel(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.anchor = nn.Parameter(torch.zeros(1))
+        self.avsr = SimpleNamespace(encoder=_FakeEncoder(), ctc=_FakeCTC())
+
+
+class _FakeTokenizer:
+    def __init__(self) -> None:
+        self.decoded_ids: list[int] | None = None
+        self.token_list = ["<blank>", "<unk>", "xin", "chào", "<eos>"]
+
+    def decode(self, token_ids: list[int]) -> str:
+        self.decoded_ids = token_ids
+        return "xin chào"
+
+
+def _prepared(frames: int = 6) -> PreparedAVInput:
+    return PreparedAVInput(
+        videos=torch.zeros((1, 1, frames, 88, 88)),
+        audios=torch.zeros((1, 104, frames)),
+        video_lengths=torch.tensor([frames]),
+        audio_lengths=torch.tensor([frames]),
+        metadata=MediaMetadata(
+            path="/tmp/sample.mp4",
+            duration_seconds=frames / 25,
+            video_width=96,
+            video_height=96,
+            frame_rate=25.0,
+            audio_sample_rate=16_000,
+            audio_channels=1,
+        ),
+    )
+
+
+def test_collapse_ctc_predictions_keeps_repeat_separated_by_blank() -> None:
+    assert collapse_ctc_predictions([0, 2, 2, 0, 2, 3, 3]) == [2, 2, 3]
+
+
+def test_recognize_prepared_av_runs_encoder_ctc_and_tokenizer() -> None:
+    tokenizer = _FakeTokenizer()
+    assets = SimpleNamespace(model=_FakeModel(), tokenizer=tokenizer)
+
+    result = recognize_prepared_av(assets, _prepared())  # type: ignore[arg-type]
+
+    assert result.transcript == "xin chào"
+    assert result.token_ids == [2, 2, 3]
+    assert result.decoder == "ctc_greedy"
+    assert result.input_video_frames == 6
+    assert result.encoder_frames == 6
+    assert result.device == "cpu"
+    assert result.dtype == "float32"
+    assert tokenizer.decoded_ids == [2, 2, 3]
+
+
+def test_recognize_prepared_av_runs_joint_beam_search(monkeypatch) -> None:
+    tokenizer = _FakeTokenizer()
+    assets = SimpleNamespace(model=_FakeModel(), tokenizer=tokenizer)
+
+    def fake_decode(
+        model,
+        features,
+        token_list,
+        *,
+        beam_size,
+        ctc_weight,
+    ) -> JointBeamSearchHypothesis:
+        assert model is assets.model.avsr
+        assert features.shape == (6, 4)
+        assert token_list is tokenizer.token_list
+        assert beam_size == 5
+        assert ctc_weight == pytest.approx(0.2)
+        return JointBeamSearchHypothesis(token_ids=[2, 3], score=-4.5)
+
+    monkeypatch.setattr(
+        recognition,
+        "decode_joint_ctc_attention",
+        fake_decode,
+    )
+
+    result = recognize_prepared_av(
+        assets,  # type: ignore[arg-type]
+        _prepared(),
+        decoder="joint_beam_search",
+        beam_size=5,
+        ctc_weight=0.2,
+    )
+
+    assert result.transcript == "xin chào"
+    assert result.token_ids == [2, 3]
+    assert result.decoder == "joint_beam_search"
+    assert result.beam_size == 5
+    assert result.ctc_weight == pytest.approx(0.2)
+    assert result.hypothesis_score == pytest.approx(-4.5)
+    assert result.to_dict()["beam_size"] == 5
+
+
+def test_recognize_prepared_av_rejects_feature_length_mismatch() -> None:
+    prepared = _prepared()
+    prepared = PreparedAVInput(
+        videos=prepared.videos,
+        audios=torch.zeros((1, 104, 5)),
+        video_lengths=prepared.video_lengths,
+        audio_lengths=torch.tensor([5]),
+        metadata=prepared.metadata,
+    )
+    assets = SimpleNamespace(model=_FakeModel(), tokenizer=_FakeTokenizer())
+
+    with pytest.raises(InferenceError, match="feature lengths differ"):
+        recognize_prepared_av(assets, prepared)  # type: ignore[arg-type]
+
+
+def test_recognize_prepared_av_wraps_tokenizer_failure() -> None:
+    class BrokenTokenizer:
+        def decode(self, token_ids: list[int]) -> str:
+            del token_ids
+            raise ValueError("invalid token")
+
+    assets = SimpleNamespace(model=_FakeModel(), tokenizer=BrokenTokenizer())
+
+    with pytest.raises(InferenceError, match="tokenizer decoding failed") as caught:
+        recognize_prepared_av(assets, _prepared())  # type: ignore[arg-type]
+
+    assert caught.value.stage == "decoding"
