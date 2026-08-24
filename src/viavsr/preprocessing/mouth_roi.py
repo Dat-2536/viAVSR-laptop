@@ -12,7 +12,11 @@ import cv2
 import numpy as np
 
 from .errors import MediaInputError
-from .face_tracking import LANDMARK_COUNT, iter_resampled_rgb_frames
+from .face_tracking import (
+    FACE_TRACK_ARTIFACT_VERSION,
+    LANDMARK_COUNT,
+    iter_resampled_rgb_frames,
+)
 from .media import (
     MOUTH_ROI_SIZE,
     MediaMetadata,
@@ -37,6 +41,8 @@ class FaceTrackArtifact:
     original_width: int
     original_height: int
     frame_rate: int
+    artifact_version: int
+    quality_passed: bool
 
     @property
     def frame_count(self) -> int:
@@ -100,8 +106,16 @@ def load_face_track_artifact(path: Path | str) -> FaceTrackArtifact:
                 payload["original_resolution"], dtype=np.int32
             )
             frame_rate_value = np.asarray(payload["frame_rate"], dtype=np.int32)
+            artifact_version_value = np.asarray(
+                payload["artifact_version"],
+                dtype=np.int32,
+            )
+            quality_passed_value = np.asarray(payload["quality_passed"], dtype=np.bool_)
     except (OSError, ValueError, KeyError) as exc:
-        raise MediaInputError(f"Could not load face-track artifact: {exc}") from exc
+        raise MediaInputError(
+            "Could not load VIAVSR-7 face-track artifact with quality metadata: "
+            f"{exc}. Rerun scripts/track_webcam_faces.py."
+        ) from exc
 
     if landmarks.ndim != 3 or landmarks.shape[1:] != (LANDMARK_COUNT, 2):
         raise MediaInputError(
@@ -109,7 +123,12 @@ def load_face_track_artifact(path: Path | str) -> FaceTrackArtifact:
         )
     if detected.shape != (len(landmarks),):
         raise MediaInputError("Face-track detection mask has the wrong shape.")
-    if original_resolution.shape != (2,) or frame_rate_value.shape != (1,):
+    if (
+        original_resolution.shape != (2,)
+        or frame_rate_value.shape != (1,)
+        or artifact_version_value.shape != (1,)
+        or quality_passed_value.shape != (1,)
+    ):
         raise MediaInputError("Face-track metadata arrays have invalid shapes.")
     if not np.isfinite(landmarks).all():
         raise MediaInputError("Face-track landmarks contain non-finite values.")
@@ -117,12 +136,27 @@ def load_face_track_artifact(path: Path | str) -> FaceTrackArtifact:
     frame_rate = int(frame_rate_value[0])
     if width <= 0 or height <= 0 or frame_rate <= 0:
         raise MediaInputError("Face-track dimensions and frame rate must be positive.")
+    artifact_version = int(artifact_version_value[0])
+    if artifact_version != FACE_TRACK_ARTIFACT_VERSION:
+        raise MediaInputError(
+            "Unsupported face-track artifact version "
+            f"{artifact_version}; expected {FACE_TRACK_ARTIFACT_VERSION}. "
+            "Rerun scripts/track_webcam_faces.py."
+        )
+    quality_passed = bool(quality_passed_value[0])
+    if not quality_passed:
+        raise MediaInputError(
+            "Face-track quality gates failed. Inspect the paired tracking JSON "
+            "report and record the sample again before mouth-ROI extraction."
+        )
     return FaceTrackArtifact(
         landmarks=landmarks,
         detected=detected,
         original_width=width,
         original_height=height,
         frame_rate=frame_rate,
+        artifact_version=artifact_version,
+        quality_passed=quality_passed,
     )
 
 

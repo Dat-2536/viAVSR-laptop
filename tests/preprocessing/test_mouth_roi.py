@@ -89,6 +89,8 @@ def test_load_face_track_artifact_reads_numeric_arrays(tmp_path) -> None:
         detected=np.asarray([True, False, True]),
         original_resolution=np.asarray([1920, 1080], dtype=np.int32),
         frame_rate=np.asarray([25], dtype=np.int32),
+        artifact_version=np.asarray([1], dtype=np.int32),
+        quality_passed=np.asarray([True], dtype=np.bool_),
     )
 
     artifact = load_face_track_artifact(path)
@@ -97,6 +99,7 @@ def test_load_face_track_artifact_reads_numeric_arrays(tmp_path) -> None:
     assert artifact.original_width == 1920
     assert artifact.original_height == 1080
     assert artifact.frame_rate == 25
+    assert artifact.artifact_version == 1
     assert artifact.detected.tolist() == [True, False, True]
 
 
@@ -128,7 +131,62 @@ def test_load_face_track_artifact_rejects_invalid_shapes(
         detected=detected,
         original_resolution=np.asarray([1920, 1080], dtype=np.int32),
         frame_rate=np.asarray([25], dtype=np.int32),
+        artifact_version=np.asarray([1], dtype=np.int32),
+        quality_passed=np.asarray([True], dtype=np.bool_),
     )
 
     with pytest.raises(MediaInputError, match=message):
+        load_face_track_artifact(path)
+
+
+def test_load_face_track_artifact_rejects_failed_quality_gate(tmp_path) -> None:
+    path = tmp_path / "failed_track.npz"
+    np.savez_compressed(
+        path,
+        landmarks=np.ones((3, 68, 2), dtype=np.float32),
+        detected=np.asarray([True, False, True]),
+        original_resolution=np.asarray([1920, 1080], dtype=np.int32),
+        frame_rate=np.asarray([25], dtype=np.int32),
+        artifact_version=np.asarray([1], dtype=np.int32),
+        quality_passed=np.asarray([False], dtype=np.bool_),
+    )
+
+    with pytest.raises(MediaInputError, match="quality gates failed"):
+        load_face_track_artifact(path)
+
+
+def test_load_face_track_artifact_rejects_legacy_artifact_without_quality(
+    tmp_path,
+) -> None:
+    path = tmp_path / "legacy_track.npz"
+    np.savez_compressed(
+        path,
+        landmarks=np.ones((3, 68, 2), dtype=np.float32),
+        detected=np.asarray([True, False, True]),
+        original_resolution=np.asarray([1920, 1080], dtype=np.int32),
+        frame_rate=np.asarray([25], dtype=np.int32),
+    )
+
+    with pytest.raises(
+        MediaInputError,
+        match="VIAVSR-7 face-track artifact with quality metadata",
+    ):
+        load_face_track_artifact(path)
+
+
+def test_load_face_track_artifact_rejects_unsupported_version(tmp_path) -> None:
+    path = tmp_path / "future_track.npz"
+    np.savez_compressed(
+        path,
+        landmarks=np.ones((3, 68, 2), dtype=np.float32),
+        detected=np.asarray([True, True, True]),
+        original_resolution=np.asarray([1920, 1080], dtype=np.int32),
+        frame_rate=np.asarray([25], dtype=np.int32),
+        artifact_version=np.asarray([999], dtype=np.int32),
+        quality_passed=np.asarray([True], dtype=np.bool_),
+    )
+
+    with pytest.raises(
+        MediaInputError, match="Unsupported face-track artifact version"
+    ):
         load_face_track_artifact(path)

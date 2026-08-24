@@ -191,7 +191,45 @@ samples/webcam/webcam_001_reference.txt
 
 ## End-to-end webcam inference
 
-### 1. Inspect the raw recording
+### One-command raw-video workflow
+
+For the normal demo path, give the runner a raw webcam video that contains both
+video and audio:
+
+~~~bash
+python scripts/run_avsr_demo.py \
+  --config configs/config.yaml \
+  --media samples/webcam/webcam_001.mp4 \
+  --tracking-device auto \
+  --decoder joint_beam_search \
+  --beam-size 3 \
+  --ctc-weight 0.1
+~~~
+
+Add `--reference-text "the exact sentence spoken in the video"` to calculate
+WER/CER. The model device and dtype come from `configs/config.yaml`; the
+tracking device is selected independently with `--tracking-device`.
+
+A run writes a self-contained directory named after the input stem:
+
+~~~text
+outputs/demo/webcam_001/
+  face_track.npz
+  face_tracking.json
+  mouth96.mp4
+  mouth_roi.json
+  report.json
+~~~
+
+The final report contains raw-media metadata, face-quality diagnostics,
+preprocessed tensor shapes, model/tokenizer metadata, decoder parameters,
+transcript, timings, and optional WER/CER. The command exits non-zero on failure.
+It also deletes stale artifacts for the same input stem before starting and
+stops before mouth extraction or model loading when the face-quality gate fails.
+
+### Manual stage-by-stage workflow
+
+#### 1. Inspect the raw recording
 
 ```bash
 python scripts/check_media_input.py \
@@ -207,7 +245,7 @@ Typical `next_stage` values:
 
 A raw full-frame video normally reports `has_mouth_roi_resolution: false`. This describes the current file and is not a tracking failure.
 
-### 2. Track faces and landmarks
+#### 2. Track faces and landmarks
 
 One recording:
 
@@ -236,9 +274,19 @@ outputs/preprocessing/face_tracks/<stem>_face_track.npz
 outputs/preprocessing/face_tracks/<stem>_face_track.json
 ```
 
-The NPZ contains landmarks, face boxes, confidence scores, and detection masks. Load it with `numpy.load(path, allow_pickle=False)`. Use `--device cuda` to require CUDA or `--device cpu` to force CPU tracking.
+The NPZ contains landmarks, face boxes, confidence scores, detection masks, and
+a versioned VIAVSR-7 quality result. Load it with
+`numpy.load(path, allow_pickle=False)`. Quality thresholds live under
+`face_tracking` in `configs/config.yaml`; `--config` selects another policy
+and `--confidence-threshold` overrides only its detection-confidence threshold.
+Low-confidence, low-landmark-confidence, too-small, mostly out-of-frame, and
+geometrically inconsistent face candidates are excluded. This is temporal
+association, not biometric face recognition. The command exits non-zero when the resulting track
+fails clip-level detection-rate, internal/edge missing-run, minimum-frame, or
+ambiguity thresholds. Inspect `quality_issues` and `quality_thresholds` in the JSON
+before retrying.
 
-### 3. Align faces and extract mouth regions
+#### 3. Align faces and extract mouth regions
 
 ```bash
 python scripts/prepare_webcam_mouth_roi.py \
@@ -258,7 +306,7 @@ outputs/preprocessing/mouth_roi/<stem>_mouth96.json
 
 Each MP4 contains a 96×96 aligned grayscale mouth track at 25 fps and synchronized 16 kHz mono audio.
 
-### 4. Run model inference
+#### 4. Run model inference
 
 Joint CTC/attention decoding:
 
@@ -295,7 +343,7 @@ Released joint-decoder settings:
 
 The inference report includes media metadata, tensor shapes, token IDs, transcript, decoder parameters, device, dtype, timing, and optional evaluation.
 
-### 5. Evaluate an existing transcript
+#### 5. Evaluate an existing transcript
 
 ```bash
 python scripts/evaluate_transcripts.py \
@@ -396,7 +444,7 @@ python -m pytest
 Current validated result:
 
 ```text
-86 passed
+110 passed
 ```
 
 When Ruff is installed:
@@ -473,6 +521,9 @@ A line-continuation backslash must be the final character on its line. Do not pu
 ### Face detection is unstable
 
 Improve frontal pose, lighting, face size, and mouth visibility. Inspect the tracking JSON for detection rate, interpolated frames, confidence, and maximum missing runs.
+Mouth-ROI extraction intentionally rejects a failed track, unsupported artifact
+versions, and legacy NPZ files without VIAVSR-7 quality metadata. Rerun `track_webcam_faces.py` after improving
+the recording; do not bypass the gate by editing the artifact.
 
 ## Current limitations
 

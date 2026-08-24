@@ -2,8 +2,10 @@
 
 from .errors import MediaInputError
 from .face_tracking import (
+    FaceTrackingQualityPolicy,
     FANFaceLandmarker,
     TrackedFaceSequence,
+    load_face_tracking_quality_policy,
     save_face_tracking_artifacts,
     track_face_landmarks,
 )
@@ -22,12 +24,14 @@ from .mouth_roi import (
 
 __all__ = [
     "FANFaceLandmarker",
+    "FaceTrackingQualityPolicy",
     "MediaInputError",
     "MediaMetadata",
     "MouthROIExportResult",
     "PreparedAVInput",
     "TrackedFaceSequence",
     "export_aligned_mouth_roi_video",
+    "load_face_tracking_quality_policy",
     "load_mean_face",
     "prepare_mouth_roi_media",
     "probe_av_media",
