@@ -318,3 +318,40 @@ def prepare_mouth_roi_media(
         audio_lengths=audio_lengths,
         metadata=metadata,
     )
+
+
+def prepare_audio_only_media(
+    path: Path | str, *, max_duration_seconds: float = 15.0
+) -> PreparedAVInput:
+    """Prepare aligned audio features while intentionally ignoring video pixels.
+
+    A zero-valued video tensor is retained only to reuse the batch-one prepared
+    input contract and length validation. Experimental audio-only recognition
+    passes video=None to AV-HuBERT, so this placeholder never enters the model.
+    """
+    media_path = Path(path).expanduser().resolve()
+    metadata = probe_av_media(media_path)
+    if metadata.duration_seconds > max_duration_seconds:
+        raise MediaInputError(
+            f"Media is {metadata.duration_seconds:.2f}s; inference accepts at most "
+            f"{max_duration_seconds:.2f}s per segment."
+        )
+
+    waveform = _decode_audio_waveform(media_path)
+    frame_count = max(
+        1,
+        round(len(waveform) / AUDIO_SAMPLES_PER_VIDEO_FRAME),
+    )
+    audios = preprocess_audio_waveform(waveform, frame_count)
+    videos = torch.zeros(
+        (1, 1, frame_count, MODEL_VIDEO_SIZE, MODEL_VIDEO_SIZE),
+        dtype=audios.dtype,
+    )
+    lengths = torch.tensor([frame_count], dtype=torch.long)
+    return PreparedAVInput(
+        videos=videos,
+        audios=audios,
+        video_lengths=lengths,
+        audio_lengths=lengths.clone(),
+        metadata=metadata,
+    )

@@ -18,6 +18,7 @@ from .errors import InferenceError
 from .schemas import InferenceResult, LoadedAVSRAssets
 
 DecoderName = Literal["ctc_greedy", "joint_beam_search"]
+InferenceMode = Literal["audio_visual", "audio_only_experimental"]
 
 
 def collapse_ctc_predictions(
@@ -96,19 +97,31 @@ def recognize_prepared_av(
     decoder: DecoderName = "ctc_greedy",
     beam_size: int = DEFAULT_BEAM_SIZE,
     ctc_weight: float = DEFAULT_CTC_WEIGHT,
+    inference_mode: InferenceMode = "audio_visual",
 ) -> InferenceResult:
-    """Run batch-one AV-HuBERT encoding and configurable decoding."""
+    """Run batch-one AV-HuBERT encoding and configurable decoding.
+
+    The audio-only experiment exercises the released encoder's native
+    video=None branch. This mode must be evaluated empirically rather than
+    treated as a supported production fallback.
+    """
     _validate_prepared_input(prepared)
     if decoder not in {"ctc_greedy", "joint_beam_search"}:
         raise InferenceError(
             f"Unsupported decoder: {decoder!r}.",
             stage="decoding",
         )
+    if inference_mode not in {"audio_visual", "audio_only_experimental"}:
+        raise InferenceError(
+            f"Unsupported inference mode: {inference_mode!r}.",
+            stage="inference_input",
+        )
 
     model = assets.model
     device, dtype = _model_device_and_dtype(model)
     videos = prepared.videos.to(device=device, dtype=dtype)
     audios = prepared.audios.to(device=device, dtype=dtype)
+    encoder_video = videos if inference_mode == "audio_visual" else None
     model.eval()
     hypothesis_score: float | None = None
 
@@ -116,8 +129,20 @@ def recognize_prepared_av(
         _synchronize(device)
         started = time.perf_counter()
         with torch.inference_mode():
-            output = model.avsr.encoder(input_features=audios, video=videos)
-            features = output.last_hidden_state
+            if encoder_video is None:
+                features, _ = model.avsr.encoder.extract_finetune(
+                    {
+                        "audio": audios,
+                        "video": None,
+                    },
+                    padding_mask=None,
+                )
+            else:
+                output = model.avsr.encoder(
+                    input_features=audios,
+                    video=encoder_video,
+                )
+                features = output.last_hidden_state
             if decoder == "ctc_greedy":
                 log_probabilities = model.avsr.ctc.log_softmax(features)
                 frame_ids = log_probabilities.argmax(dim=-1)[0].tolist()
@@ -157,6 +182,8 @@ def recognize_prepared_av(
         inference_seconds=elapsed,
         device=str(device),
         dtype=str(dtype).removeprefix("torch."),
+        inference_mode=inference_mode,
+        visual_input_used=encoder_video is not None,
         beam_size=beam_size if decoder == "joint_beam_search" else None,
         ctc_weight=ctc_weight if decoder == "joint_beam_search" else None,
         hypothesis_score=hypothesis_score,

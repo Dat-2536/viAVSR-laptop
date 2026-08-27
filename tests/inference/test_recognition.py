@@ -15,11 +15,24 @@ from viavsr.preprocessing.media import MediaMetadata, PreparedAVInput
 
 
 class _FakeEncoder:
+    def __init__(self) -> None:
+        self.seen_video: torch.Tensor | None = torch.empty(0)
+
     def __call__(
-        self, *, input_features: torch.Tensor, video: torch.Tensor
+        self, *, input_features: torch.Tensor, video: torch.Tensor | None
     ) -> SimpleNamespace:
-        del input_features, video
+        del input_features
+        self.seen_video = video
         return SimpleNamespace(last_hidden_state=torch.zeros((1, 6, 4)))
+
+    def extract_finetune(
+        self,
+        source: dict[str, torch.Tensor | None],
+        padding_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, None]:
+        del padding_mask
+        self.seen_video = source["video"]
+        return torch.zeros((1, 6, 4)), None
 
 
 class _FakeCTC:
@@ -126,6 +139,22 @@ def test_recognize_prepared_av_runs_joint_beam_search(monkeypatch) -> None:
     assert result.ctc_weight == pytest.approx(0.2)
     assert result.hypothesis_score == pytest.approx(-4.5)
     assert result.to_dict()["beam_size"] == 5
+
+
+def test_recognize_prepared_av_runs_experimental_audio_only() -> None:
+    model = _FakeModel()
+    assets = SimpleNamespace(model=model, tokenizer=_FakeTokenizer())
+
+    result = recognize_prepared_av(
+        assets,  # type: ignore[arg-type]
+        _prepared(),
+        inference_mode="audio_only_experimental",
+    )
+
+    assert model.avsr.encoder.seen_video is None
+    assert result.transcript == "xin ch\u00e0o"
+    assert result.inference_mode == "audio_only_experimental"
+    assert result.visual_input_used is False
 
 
 def test_recognize_prepared_av_rejects_feature_length_mismatch() -> None:

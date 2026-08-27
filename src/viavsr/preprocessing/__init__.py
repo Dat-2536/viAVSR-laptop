@@ -12,6 +12,7 @@ from .face_tracking import (
 from .media import (
     MediaMetadata,
     PreparedAVInput,
+    prepare_audio_only_media,
     prepare_mouth_roi_media,
     probe_av_media,
     validate_demo_media,
@@ -33,6 +34,7 @@ __all__ = [
     "export_aligned_mouth_roi_video",
     "load_face_tracking_quality_policy",
     "load_mean_face",
+    "prepare_audio_only_media",
     "prepare_mouth_roi_media",
     "probe_av_media",
     "save_face_tracking_artifacts",
