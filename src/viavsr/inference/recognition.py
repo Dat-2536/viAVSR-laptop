@@ -18,7 +18,11 @@ from .errors import InferenceError
 from .schemas import InferenceResult, LoadedAVSRAssets
 
 DecoderName = Literal["ctc_greedy", "joint_beam_search"]
-InferenceMode = Literal["audio_visual", "audio_only_experimental"]
+InferenceMode = Literal[
+    "audio_visual",
+    "audio_only_experimental",
+    "audio_only_fallback",
+]
 
 
 def collapse_ctc_predictions(
@@ -101,9 +105,10 @@ def recognize_prepared_av(
 ) -> InferenceResult:
     """Run batch-one AV-HuBERT encoding and configurable decoding.
 
-    The audio-only experiment exercises the released encoder's native
-    video=None branch. This mode must be evaluated empirically rather than
-    treated as a supported production fallback.
+    Both audio-only modes exercise the released encoder's native video=None
+    branch. audio_only_experimental is an explicit caller request, while
+    audio_only_fallback records an automatic orchestration decision after
+    visual preprocessing could not provide a trustworthy input.
     """
     _validate_prepared_input(prepared)
     if decoder not in {"ctc_greedy", "joint_beam_search"}:
@@ -111,7 +116,11 @@ def recognize_prepared_av(
             f"Unsupported decoder: {decoder!r}.",
             stage="decoding",
         )
-    if inference_mode not in {"audio_visual", "audio_only_experimental"}:
+    if inference_mode not in {
+        "audio_visual",
+        "audio_only_experimental",
+        "audio_only_fallback",
+    }:
         raise InferenceError(
             f"Unsupported inference mode: {inference_mode!r}.",
             stage="inference_input",

@@ -22,7 +22,9 @@ from viavsr.preprocessing import (
     FANFaceLandmarker,
     MediaInputError,
     export_aligned_mouth_roi_video,
+    export_mouth_roi_display_video,
     load_face_tracking_quality_policy,
+    prepare_audio_only_media,
     prepare_mouth_roi_media,
     probe_av_media,
     save_face_tracking_artifacts,
@@ -31,7 +33,7 @@ from viavsr.preprocessing import (
 from viavsr.preprocessing.face_tracking import DEFAULT_DETECTION_MAX_SIZE, DeviceRequest
 from viavsr.preprocessing.media import TARGET_FRAME_RATE
 
-DEMO_REPORT_SCHEMA_VERSION = 1
+DEMO_REPORT_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,8 @@ class DemoArtifactPaths:
     face_tracking_report: Path
     mouth_roi: Path
     mouth_roi_report: Path
+    mouth_roi_display: Path
+    mouth_roi_display_report: Path
     report: Path
 
     @classmethod
@@ -54,6 +58,8 @@ class DemoArtifactPaths:
             face_tracking_report=run_directory / "face_tracking.json",
             mouth_roi=run_directory / "mouth96.mp4",
             mouth_roi_report=run_directory / "mouth_roi.json",
+            mouth_roi_display=run_directory / "mouth96_display.mp4",
+            mouth_roi_display_report=run_directory / "mouth_roi_display.json",
             report=run_directory / "report.json",
         )
 
@@ -64,6 +70,8 @@ class DemoArtifactPaths:
             "face_tracking_report": str(self.face_tracking_report),
             "mouth_roi": str(self.mouth_roi),
             "mouth_roi_report": str(self.mouth_roi_report),
+            "mouth_roi_display": str(self.mouth_roi_display),
+            "mouth_roi_display_report": str(self.mouth_roi_display_report),
             "report": str(self.report),
         }
 
@@ -76,6 +84,8 @@ class DemoArtifactPaths:
             self.face_tracking_report,
             self.mouth_roi,
             self.mouth_roi_report,
+            self.mouth_roi_display,
+            self.mouth_roi_display_report,
             self.report,
         ):
             path.unlink(missing_ok=True)
@@ -134,6 +144,8 @@ def _failure(
         write_json_report(paths.face_tracking_report, payload["error"])
     elif stage == "mouth_roi":
         write_json_report(paths.mouth_roi_report, payload["error"])
+    elif stage == "mouth_roi_display":
+        write_json_report(paths.mouth_roi_display_report, payload["error"])
     return _finish_report(payload, paths, started_at)
 
 
@@ -152,10 +164,10 @@ def run_end_to_end_demo(
     max_detection_size: int = DEFAULT_DETECTION_MAX_SIZE,
     confidence_threshold: float | None = None,
 ) -> dict[str, Any]:
-    """Run raw media through tracking, mouth extraction, and AVSR inference.
+    """Run raw media through best-effort visual processing and AVSR inference.
 
-    All generated files are written below output_root/media-stem. A failed face
-    quality gate stops the pipeline before mouth extraction and model loading.
+    All generated files are written below output_root/media-stem. Failed face
+    tracking falls back to audio-only inference when the media audio is usable.
     """
 
     started_at = time.perf_counter()
@@ -229,59 +241,157 @@ def run_end_to_end_demo(
 
         stage = "face_tracking"
         stage_started = time.perf_counter()
-        sequence = track_face_landmarks(
-            resolved_media,
-            landmarker=landmarker,
-            frame_rate=frame_rate,
-            policy=quality_policy,
-            max_detection_size=max_detection_size,
-        )
-        face_report = save_face_tracking_artifacts(
-            sequence,
-            artifact_path=paths.face_track,
-            report_path=paths.face_tracking_report,
-        )
-        face_report["tracking_seconds"] = time.perf_counter() - stage_started
-        write_json_report(paths.face_tracking_report, face_report)
-        payload["face_tracking"] = face_report
-        payload["timings_seconds"]["face_tracking"] = face_report["tracking_seconds"]
+        visual_fallback: dict[str, str] | None = None
+        try:
+            sequence = track_face_landmarks(
+                resolved_media,
+                landmarker=landmarker,
+                frame_rate=frame_rate,
+                policy=quality_policy,
+                max_detection_size=max_detection_size,
+            )
+        except MediaInputError as exc:
+            tracking_seconds = time.perf_counter() - stage_started
+            visual_fallback = {
+                "stage": stage,
+                "type": type(exc).__name__,
+                "message": redact_secrets(str(exc)),
+            }
+            face_report = {
+                "status": "unavailable",
+                "quality_status": "unavailable",
+                "stage": stage,
+                "error": {
+                    "type": visual_fallback["type"],
+                    "message": visual_fallback["message"],
+                },
+                "tracking_seconds": tracking_seconds,
+            }
+            write_json_report(paths.face_tracking_report, face_report)
+            payload["face_tracking"] = face_report
+            payload["timings_seconds"]["face_tracking"] = tracking_seconds
+        else:
+            face_report = save_face_tracking_artifacts(
+                sequence,
+                artifact_path=paths.face_track,
+                report_path=paths.face_tracking_report,
+            )
+            face_report["tracking_seconds"] = time.perf_counter() - stage_started
+            write_json_report(paths.face_tracking_report, face_report)
+            payload["face_tracking"] = face_report
+            payload["timings_seconds"]["face_tracking"] = face_report[
+                "tracking_seconds"
+            ]
 
-        if not sequence.quality_passed:
-            return _failure(
-                payload=payload,
-                paths=paths,
-                started_at=started_at,
-                stage="face_tracking_quality",
-                error_type="FaceTrackingQualityError",
-                message="; ".join(sequence.quality_issues),
+            if not sequence.quality_passed:
+                visual_fallback = {
+                    "stage": "face_tracking_quality",
+                    "type": "FaceTrackingQualityError",
+                    "message": redact_secrets("; ".join(sequence.quality_issues)),
+                }
+
+        stage = "mouth_roi_display"
+        stage_started = time.perf_counter()
+        display_track_path = paths.face_track if paths.face_track.is_file() else None
+        try:
+            display_result = export_mouth_roi_display_video(
+                resolved_media,
+                paths.mouth_roi_display,
+                track_path=display_track_path,
+            )
+        except MediaInputError as exc:
+            display_report = {
+                "status": "unavailable",
+                "artifact_role": "ui_visualization_only",
+                "used_for_inference": False,
+                "error": {
+                    "type": type(exc).__name__,
+                    "message": redact_secrets(str(exc)),
+                },
+                "processing_seconds": time.perf_counter() - stage_started,
+            }
+            payload.setdefault("warnings", []).append(
+                "mouth_roi_display_unavailable"
+            )
+        else:
+            display_report = display_result.to_dict()
+            display_report["status"] = "passed"
+            display_report["artifact_role"] = "ui_visualization_only"
+            display_report["used_for_inference"] = False
+            display_report["processing_seconds"] = (
+                time.perf_counter() - stage_started
+            )
+            payload["face_tracking"]["visual_availability"] = (
+                display_result.visual_availability
+            )
+            write_json_report(
+                paths.face_tracking_report,
+                payload["face_tracking"],
+            )
+        write_json_report(paths.mouth_roi_display_report, display_report)
+        payload["mouth_roi_display"] = display_report
+        payload["timings_seconds"]["mouth_roi_display"] = display_report[
+            "processing_seconds"
+        ]
+
+        inference_mode = "audio_visual"
+        if visual_fallback is not None:
+            inference_mode = "audio_only_fallback"
+            payload.setdefault("warnings", []).append(
+                "visual_preprocessing_unavailable_audio_only_fallback"
+            )
+            payload["modality_decision"] = {
+                "policy": "automatic",
+                "selected_mode": inference_mode,
+                "visual_input_used": False,
+                "visual_gap_policy": "visual_input_not_used",
+                "display_gap_policy": "no_visual_signal_placeholder",
+                "fallback_reason": visual_fallback,
+            }
+            stage = "audio_preprocessing"
+            stage_started = time.perf_counter()
+            prepared = prepare_audio_only_media(
+                resolved_media,
+                max_duration_seconds=max_duration_seconds,
+            )
+            payload["timings_seconds"]["audio_preprocessing"] = (
+                time.perf_counter() - stage_started
+            )
+        else:
+            payload["modality_decision"] = {
+                "policy": "automatic",
+                "selected_mode": inference_mode,
+                "visual_input_used": True,
+                "visual_gap_policy": "interpolated_landmarks",
+                "display_gap_policy": "no_visual_signal_placeholder",
+            }
+            stage = "mouth_roi"
+            stage_started = time.perf_counter()
+            mouth_result = export_aligned_mouth_roi_video(
+                resolved_media,
+                paths.face_track,
+                paths.mouth_roi,
+            )
+            mouth_report = mouth_result.to_dict()
+            mouth_report["processing_seconds"] = time.perf_counter() - stage_started
+            write_json_report(paths.mouth_roi_report, mouth_report)
+            payload["mouth_roi"] = mouth_report
+            payload["timings_seconds"]["mouth_roi"] = mouth_report["processing_seconds"]
+
+            stage = "av_preprocessing"
+            stage_started = time.perf_counter()
+            prepared = prepare_mouth_roi_media(
+                paths.mouth_roi,
+                max_duration_seconds=max_duration_seconds,
+            )
+            payload["timings_seconds"]["av_preprocessing"] = (
+                time.perf_counter() - stage_started
             )
 
-        stage = "mouth_roi"
-        stage_started = time.perf_counter()
-        mouth_result = export_aligned_mouth_roi_video(
-            resolved_media,
-            paths.face_track,
-            paths.mouth_roi,
-        )
-        mouth_report = mouth_result.to_dict()
-        mouth_report["processing_seconds"] = time.perf_counter() - stage_started
-        write_json_report(paths.mouth_roi_report, mouth_report)
-        payload["mouth_roi"] = mouth_report
-        payload["timings_seconds"]["mouth_roi"] = mouth_report["processing_seconds"]
-
-        stage = "av_preprocessing"
-        stage_started = time.perf_counter()
-        prepared = prepare_mouth_roi_media(
-            paths.mouth_roi,
-            max_duration_seconds=max_duration_seconds,
-        )
         payload["prepared_input"] = {
             "media": prepared.metadata.to_dict(),
             "input_shapes": prepared.shape_report(),
         }
-        payload["timings_seconds"]["av_preprocessing"] = (
-            time.perf_counter() - stage_started
-        )
 
         stage = "model_loading"
         stage_started = time.perf_counter()
@@ -299,6 +409,7 @@ def run_end_to_end_demo(
             decoder=decoder,
             beam_size=beam_size,
             ctc_weight=ctc_weight,
+            inference_mode=inference_mode,
         )
         payload["result"] = result.to_dict()
         payload["timings_seconds"]["inference"] = result.inference_seconds

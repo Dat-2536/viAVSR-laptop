@@ -157,6 +157,21 @@ def test_recognize_prepared_av_runs_experimental_audio_only() -> None:
     assert result.visual_input_used is False
 
 
+def test_recognize_prepared_av_runs_audio_only_fallback() -> None:
+    model = _FakeModel()
+    assets = SimpleNamespace(model=model, tokenizer=_FakeTokenizer())
+
+    result = recognize_prepared_av(
+        assets,  # type: ignore[arg-type]
+        _prepared(),
+        inference_mode="audio_only_fallback",
+    )
+
+    assert model.avsr.encoder.seen_video is None
+    assert result.inference_mode == "audio_only_fallback"
+    assert result.visual_input_used is False
+
+
 def test_recognize_prepared_av_rejects_feature_length_mismatch() -> None:
     prepared = _prepared()
     prepared = PreparedAVInput(

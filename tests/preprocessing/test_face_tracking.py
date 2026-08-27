@@ -9,6 +9,7 @@ from viavsr.preprocessing.face_tracking import (
     FaceTrackingQualityPolicy,
     bounding_box_iou,
     build_tracked_sequence,
+    build_visual_availability,
     decide_tracked_face,
     interpolate_missing_rows,
     load_face_tracking_quality_policy,
@@ -129,6 +130,46 @@ def test_maximum_false_run() -> None:
     assert maximum_false_run(mask) == 2
 
 
+def test_build_visual_availability_reports_every_missing_interval() -> None:
+    mask = np.asarray(
+        [False, False, True, False, True, False, False],
+        dtype=np.bool_,
+    )
+
+    result = build_visual_availability(mask, frame_rate=2)
+
+    assert result["frame_count"] == 7
+    assert result["valid_frames"] == 2
+    assert result["missing_frames"] == 5
+    assert result["coverage"] == pytest.approx(2 / 7)
+    assert result["missing_intervals"] == [
+        {
+            "start_frame": 0,
+            "end_frame_exclusive": 2,
+            "frame_count": 2,
+            "start_seconds": 0.0,
+            "end_seconds": 1.0,
+            "duration_seconds": 1.0,
+        },
+        {
+            "start_frame": 3,
+            "end_frame_exclusive": 4,
+            "frame_count": 1,
+            "start_seconds": 1.5,
+            "end_seconds": 2.0,
+            "duration_seconds": 0.5,
+        },
+        {
+            "start_frame": 5,
+            "end_frame_exclusive": 7,
+            "frame_count": 2,
+            "start_seconds": 2.5,
+            "end_seconds": 3.5,
+            "duration_seconds": 1.0,
+        },
+    ]
+
+
 def test_build_tracked_sequence_interpolates_missing_frame() -> None:
     frame_zero = _candidate((10, 10, 50, 50), landmark_value=0.0)
     frame_one = _candidate((12, 12, 52, 52), landmark_value=2.0)
@@ -195,6 +236,9 @@ def test_save_face_tracking_artifacts_writes_numeric_npz_and_json(tmp_path) -> N
     assert "identity_switches_prevented" not in payload
     assert saved_report["detection_rate"] == 1.0
     assert saved_report["artifact_path"] == str(artifact_path.resolve())
+    assert saved_report["visual_availability"]["coverage"] == 1.0
+    assert saved_report["visual_availability"]["missing_frames"] == 0
+    assert saved_report["visual_availability"]["missing_intervals"] == []
 
 
 def test_identity_gate_rejects_distant_face() -> None:

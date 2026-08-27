@@ -8,11 +8,21 @@ from viavsr.preprocessing.mouth_roi import (
     MOUTH_START_INDEX,
     MOUTH_STOP_INDEX,
     align_and_crop_mouth_frame,
+    create_no_signal_frame,
     estimate_alignment_transform,
     load_face_track_artifact,
     load_mean_face,
     smooth_landmarks,
 )
+
+
+def test_create_no_signal_frame_is_visible_grayscale_placeholder() -> None:
+    frame = create_no_signal_frame()
+
+    assert frame.shape == (96, 96)
+    assert frame.dtype == np.uint8
+    assert frame.min() < frame.max()
+    assert np.count_nonzero(frame > 100) > 0
 
 
 def test_load_mean_face_returns_official_68_point_geometry() -> None:
@@ -153,6 +163,12 @@ def test_load_face_track_artifact_rejects_failed_quality_gate(tmp_path) -> None:
 
     with pytest.raises(MediaInputError, match="quality gates failed"):
         load_face_track_artifact(path)
+
+    diagnostic_artifact = load_face_track_artifact(
+        path, require_quality_passed=False
+    )
+    assert diagnostic_artifact.quality_passed is False
+    assert diagnostic_artifact.detected.tolist() == [True, False, True]
 
 
 def test_load_face_track_artifact_rejects_legacy_artifact_without_quality(

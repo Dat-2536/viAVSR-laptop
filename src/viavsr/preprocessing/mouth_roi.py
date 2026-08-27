@@ -15,10 +15,12 @@ from .errors import MediaInputError
 from .face_tracking import (
     FACE_TRACK_ARTIFACT_VERSION,
     LANDMARK_COUNT,
+    build_visual_availability,
     iter_resampled_rgb_frames,
 )
 from .media import (
     MOUTH_ROI_SIZE,
+    TARGET_FRAME_RATE,
     MediaMetadata,
     probe_av_media,
     validate_demo_media,
@@ -69,6 +71,27 @@ class MouthROIExportResult:
         return payload
 
 
+@dataclass(frozen=True)
+class MouthROIDisplayResult:
+    """Metadata for a display-only mouth ROI video with explicit signal gaps."""
+
+    source_path: str
+    track_path: str | None
+    output_path: str
+    frame_count: int
+    frame_rate: int
+    mouth_roi_size: int
+    detected_frames: int
+    no_signal_frames: int
+    visual_availability: dict[str, Any]
+    output_media: MediaMetadata
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["output_media"] = self.output_media.to_dict()
+        return payload
+
+
 def load_mean_face(path: Path | str = MEAN_FACE_PATH) -> np.ndarray:
     """Load the attributed AVSRCocktail 68-point mean-face reference."""
     asset_path = Path(path).expanduser().resolve()
@@ -93,7 +116,11 @@ def load_mean_face(path: Path | str = MEAN_FACE_PATH) -> np.ndarray:
     return points
 
 
-def load_face_track_artifact(path: Path | str) -> FaceTrackArtifact:
+def load_face_track_artifact(
+    path: Path | str,
+    *,
+    require_quality_passed: bool = True,
+) -> FaceTrackArtifact:
     """Load and validate a safe numeric face-track NPZ artifact."""
     artifact_path = Path(path).expanduser().resolve()
     if not artifact_path.is_file():
@@ -144,7 +171,7 @@ def load_face_track_artifact(path: Path | str) -> FaceTrackArtifact:
             "Rerun scripts/track_webcam_faces.py."
         )
     quality_passed = bool(quality_passed_value[0])
-    if not quality_passed:
+    if require_quality_passed and not quality_passed:
         raise MediaInputError(
             "Face-track quality gates failed. Inspect the paired tracking JSON "
             "report and record the sample again before mouth-ROI extraction."
@@ -236,6 +263,37 @@ def align_and_crop_mouth_frame(
     if patch.shape != (MOUTH_ROI_SIZE, MOUTH_ROI_SIZE):
         raise MediaInputError(f"Unexpected mouth patch shape: {patch.shape}.")
     return np.ascontiguousarray(patch, dtype=np.uint8)
+
+
+def create_no_signal_frame() -> np.ndarray:
+    """Create a 96x96 UI placeholder for a missing visual observation."""
+    frame = np.full((MOUTH_ROI_SIZE, MOUTH_ROI_SIZE), 18, dtype=np.uint8)
+    cv2.rectangle(
+        frame,
+        (3, 3),
+        (MOUTH_ROI_SIZE - 4, MOUTH_ROI_SIZE - 4),
+        color=72,
+        thickness=1,
+    )
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    for text, baseline_y in (("NO VISUAL", 43), ("SIGNAL", 62)):
+        (text_width, _), _ = cv2.getTextSize(
+            text,
+            font,
+            fontScale=0.32,
+            thickness=1,
+        )
+        cv2.putText(
+            frame,
+            text,
+            ((MOUTH_ROI_SIZE - text_width) // 2, baseline_y),
+            font,
+            0.32,
+            color=220,
+            thickness=1,
+            lineType=cv2.LINE_AA,
+        )
+    return frame
 
 
 def _require_ffmpeg() -> str:
@@ -405,5 +463,112 @@ def export_aligned_mouth_roi_video(
         mouth_roi_size=MOUTH_ROI_SIZE,
         detected_frames=int(track.detected.sum()),
         interpolated_frames=track.frame_count - int(track.detected.sum()),
+        output_media=output_metadata,
+    )
+
+
+def export_mouth_roi_display_video(
+    source_path: Path | str,
+    output_path: Path | str,
+    *,
+    track_path: Path | str | None = None,
+    mean_face_path: Path | str = MEAN_FACE_PATH,
+) -> MouthROIDisplayResult:
+    """Export a UI-only ROI video that marks each missing visual frame."""
+    source = Path(source_path).expanduser().resolve()
+    output = Path(output_path).expanduser().resolve()
+    source_metadata = probe_av_media(source)
+
+    track_file: Path | None = None
+    track: FaceTrackArtifact | None = None
+    smoothed: np.ndarray | None = None
+    reference: np.ndarray | None = None
+    if track_path is not None:
+        track_file = Path(track_path).expanduser().resolve()
+        track = load_face_track_artifact(
+            track_file,
+            require_quality_passed=False,
+        )
+        if (track.original_width, track.original_height) != (
+            source_metadata.video_width,
+            source_metadata.video_height,
+        ):
+            raise MediaInputError(
+                "Face-track original resolution does not match the source video."
+            )
+        smoothed = smooth_landmarks(track.landmarks)
+        reference = load_mean_face(mean_face_path)
+        frame_rate = track.frame_rate
+        width = track.original_width
+        height = track.original_height
+    else:
+        frame_rate = TARGET_FRAME_RATE
+        width = source_metadata.video_width
+        height = source_metadata.video_height
+
+    decoded_frames = iter_resampled_rgb_frames(
+        source,
+        width=width,
+        height=height,
+        frame_rate=frame_rate,
+    )
+    signal_mask: list[bool] = []
+    no_signal_frame = create_no_signal_frame()
+
+    def display_patches() -> Iterable[np.ndarray]:
+        for frame_index, frame in enumerate(decoded_frames):
+            if track is not None and frame_index >= track.frame_count:
+                raise MediaInputError(
+                    "Decoded video has more frames than the face-track artifact."
+                )
+            detected = track is not None and bool(track.detected[frame_index])
+            signal_mask.append(detected)
+            if detected:
+                assert smoothed is not None
+                assert reference is not None
+                yield align_and_crop_mouth_frame(
+                    frame,
+                    smoothed[frame_index],
+                    reference,
+                )
+            else:
+                yield no_signal_frame
+
+    encoded_frames = _encode_mouth_video(
+        display_patches(),
+        source_path=source,
+        output_path=output,
+        frame_rate=frame_rate,
+    )
+    if track is not None and encoded_frames != track.frame_count:
+        output.unlink(missing_ok=True)
+        raise MediaInputError(
+            "Face-track/video frame mismatch while exporting display ROI: "
+            f"track={track.frame_count}, encoded={encoded_frames}."
+        )
+    if encoded_frames != len(signal_mask):
+        output.unlink(missing_ok=True)
+        raise MediaInputError(
+            "Display ROI frame accounting mismatch: "
+            f"encoded={encoded_frames}, mask={len(signal_mask)}."
+        )
+
+    availability = build_visual_availability(
+        np.asarray(signal_mask, dtype=np.bool_),
+        frame_rate,
+    )
+    output_metadata = probe_av_media(output)
+    validate_demo_media(output_metadata)
+    detected_frames = int(sum(signal_mask))
+    return MouthROIDisplayResult(
+        source_path=str(source),
+        track_path=str(track_file) if track_file is not None else None,
+        output_path=str(output),
+        frame_count=encoded_frames,
+        frame_rate=frame_rate,
+        mouth_roi_size=MOUTH_ROI_SIZE,
+        detected_frames=detected_frames,
+        no_signal_frames=encoded_frames - detected_frames,
+        visual_availability=availability,
         output_media=output_metadata,
     )

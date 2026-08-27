@@ -66,9 +66,11 @@ class InferenceResult:
     inference_seconds: float
     device: str
     dtype: str
-    inference_mode: Literal["audio_visual", "audio_only_experimental"] = (
-        "audio_visual"
-    )
+    inference_mode: Literal[
+        "audio_visual",
+        "audio_only_experimental",
+        "audio_only_fallback",
+    ] = "audio_visual"
     visual_input_used: bool = True
     beam_size: int | None = None
     ctc_weight: float | None = None

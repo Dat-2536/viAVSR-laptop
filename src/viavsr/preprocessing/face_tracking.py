@@ -288,6 +288,10 @@ class TrackedFaceSequence:
             "mean_landmark_confidence": float(valid_landmark_scores.mean()),
             "minimum_face_area_ratio": float(face_area_ratios.min()),
             "median_face_area_ratio": float(np.median(face_area_ratios)),
+            "visual_availability": build_visual_availability(
+                self.detected,
+                self.frame_rate,
+            ),
         }
 
 
@@ -724,6 +728,58 @@ def edge_false_runs(mask: np.ndarray) -> tuple[int, int]:
             break
         trailing += 1
     return leading, trailing
+
+
+def build_visual_availability(
+    detected: np.ndarray,
+    frame_rate: int,
+) -> dict[str, Any]:
+    """Describe every missing visual interval from a frame-aligned mask."""
+    mask = np.asarray(detected, dtype=np.bool_)
+    if mask.ndim != 1:
+        raise ValueError("detected must be a one-dimensional frame mask.")
+    if frame_rate <= 0:
+        raise ValueError("frame_rate must be positive.")
+
+    intervals: list[dict[str, int | float]] = []
+    missing_start: int | None = None
+    for frame_index, is_detected in enumerate(mask):
+        if not is_detected and missing_start is None:
+            missing_start = frame_index
+        if is_detected and missing_start is not None:
+            intervals.append(
+                _missing_interval(missing_start, frame_index, frame_rate)
+            )
+            missing_start = None
+    if missing_start is not None:
+        intervals.append(_missing_interval(missing_start, len(mask), frame_rate))
+
+    valid_frames = int(mask.sum())
+    frame_count = len(mask)
+    return {
+        "frame_rate": frame_rate,
+        "frame_count": frame_count,
+        "valid_frames": valid_frames,
+        "missing_frames": frame_count - valid_frames,
+        "coverage": valid_frames / frame_count if frame_count else 0.0,
+        "missing_intervals": intervals,
+    }
+
+
+def _missing_interval(
+    start_frame: int,
+    end_frame_exclusive: int,
+    frame_rate: int,
+) -> dict[str, int | float]:
+    frame_count = end_frame_exclusive - start_frame
+    return {
+        "start_frame": start_frame,
+        "end_frame_exclusive": end_frame_exclusive,
+        "frame_count": frame_count,
+        "start_seconds": start_frame / frame_rate,
+        "end_seconds": end_frame_exclusive / frame_rate,
+        "duration_seconds": frame_count / frame_rate,
+    }
 
 
 def interpolate_missing_rows(values: np.ndarray, detected: np.ndarray) -> np.ndarray:
