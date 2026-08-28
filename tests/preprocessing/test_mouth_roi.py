@@ -111,6 +111,30 @@ def test_load_face_track_artifact_reads_numeric_arrays(tmp_path) -> None:
     assert artifact.frame_rate == 25
     assert artifact.artifact_version == 1
     assert artifact.detected.tolist() == [True, False, True]
+    assert artifact.mouth_visible_raw.tolist() == [True, False, True]
+    assert artifact.mouth_visible.tolist() == [True, False, True]
+
+
+def test_load_face_track_artifact_reads_version_two_visibility_masks(tmp_path) -> None:
+    path = tmp_path / "track_v2.npz"
+    np.savez_compressed(
+        path,
+        landmarks=np.ones((3, 68, 2), dtype=np.float32),
+        detected=np.asarray([True, False, True]),
+        mouth_visible_raw=np.asarray([True, False, True]),
+        mouth_visible=np.asarray([True, True, True]),
+        original_resolution=np.asarray([1920, 1080], dtype=np.int32),
+        frame_rate=np.asarray([25], dtype=np.int32),
+        artifact_version=np.asarray([2], dtype=np.int32),
+        quality_passed=np.asarray([True], dtype=np.bool_),
+    )
+
+    artifact = load_face_track_artifact(path)
+
+    assert artifact.artifact_version == 2
+    assert artifact.detected.tolist() == [True, False, True]
+    assert artifact.mouth_visible_raw.tolist() == [True, False, True]
+    assert artifact.mouth_visible.tolist() == [True, True, True]
 
 
 @pytest.mark.parametrize(
@@ -164,9 +188,7 @@ def test_load_face_track_artifact_rejects_failed_quality_gate(tmp_path) -> None:
     with pytest.raises(MediaInputError, match="quality gates failed"):
         load_face_track_artifact(path)
 
-    diagnostic_artifact = load_face_track_artifact(
-        path, require_quality_passed=False
-    )
+    diagnostic_artifact = load_face_track_artifact(path, require_quality_passed=False)
     assert diagnostic_artifact.quality_passed is False
     assert diagnostic_artifact.detected.tolist() == [True, False, True]
 

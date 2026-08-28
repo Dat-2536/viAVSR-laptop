@@ -12,8 +12,10 @@ face_tracking:
   min_detection_confidence: 0.8
   min_landmark_confidence: 0.6
   min_face_area_ratio: 0.005
+  min_mouth_landmark_confidence: 0.6
+  min_mouth_landmarks_in_frame_ratio: 0.9
   min_detection_rate: 0.9
-  max_missing_run: 5
+  max_missing_run: 10
   max_center_distance_ratio: 0.75
   min_association_iou: 0.1
   ambiguity_score_margin: 0.15
@@ -24,6 +26,8 @@ face_tracking:
   max_edge_missing_run: 0
   min_detected_frames: 2
 
+  max_short_visual_gap: 3
+  min_visual_run: 2
 mouth_roi:
   size: 96                     # px, theo cấu hình AV-HuBERT trong paper gốc
   landmarks: [61, 291, 0, 17, 269, 405]

@@ -21,7 +21,9 @@ from .media import TARGET_FRAME_RATE, MediaMetadata, probe_av_media
 DeviceRequest = Literal["auto", "cpu", "cuda"]
 LANDMARK_COUNT = 68
 DEFAULT_DETECTION_MAX_SIZE = 640
-FACE_TRACK_ARTIFACT_VERSION = 1
+MOUTH_START_INDEX = 48
+MOUTH_STOP_INDEX = 68
+FACE_TRACK_ARTIFACT_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,8 @@ class FaceTrackingQualityPolicy:
     min_detection_confidence: float = 0.8
     min_landmark_confidence: float = 0.6
     min_face_area_ratio: float = 0.005
+    min_mouth_landmark_confidence: float = 0.6
+    min_mouth_landmarks_in_frame_ratio: float = 0.9
     min_detection_rate: float = 0.9
     max_missing_run: int = 5
     max_center_distance_ratio: float = 0.75
@@ -42,9 +46,13 @@ class FaceTrackingQualityPolicy:
     max_ambiguous_frames: int = 0
     max_edge_missing_run: int = 0
     min_detected_frames: int = 2
+    max_short_visual_gap: int = 3
+    min_visual_run: int = 2
 
     def __post_init__(self) -> None:
         probabilities = {
+            "min_mouth_landmark_confidence": self.min_mouth_landmark_confidence,
+            "min_mouth_landmarks_in_frame_ratio": self.min_mouth_landmarks_in_frame_ratio,
             "min_detection_confidence": self.min_detection_confidence,
             "min_landmark_confidence": self.min_landmark_confidence,
             "min_face_area_ratio": self.min_face_area_ratio,
@@ -86,6 +94,7 @@ class FaceTrackingQualityPolicy:
             raise ValueError("ambiguity_score_margin must be finite and non-negative.")
         non_negative_integers = {
             "max_missing_run": self.max_missing_run,
+            "max_short_visual_gap": self.max_short_visual_gap,
             "max_ambiguous_frames": self.max_ambiguous_frames,
             "max_edge_missing_run": self.max_edge_missing_run,
         }
@@ -98,6 +107,12 @@ class FaceTrackingQualityPolicy:
             or self.min_detected_frames < 2
         ):
             raise ValueError("min_detected_frames must be an integer of at least 2.")
+        if (
+            isinstance(self.min_visual_run, bool)
+            or not isinstance(self.min_visual_run, Integral)
+            or self.min_visual_run < 1
+        ):
+            raise ValueError("min_visual_run must be a positive integer.")
 
 
 @dataclass(frozen=True)
@@ -153,6 +168,31 @@ class FaceCandidate:
             raise ValueError("landmark_scores must have shape [68].")
 
 
+def mouth_landmarks_visible(
+    candidate: FaceCandidate,
+    *,
+    frame_size: tuple[float, float],
+    policy: FaceTrackingQualityPolicy,
+) -> bool:
+    """Return whether the detected mouth landmarks are usable in this frame."""
+    frame_width, frame_height = frame_size
+    mouth = candidate.landmarks[MOUTH_START_INDEX:MOUTH_STOP_INDEX]
+    mouth_scores = candidate.landmark_scores[MOUTH_START_INDEX:MOUTH_STOP_INDEX]
+    if (
+        not np.isfinite(mouth).all()
+        or not np.isfinite(mouth_scores).all()
+        or float(mouth_scores.mean()) < policy.min_mouth_landmark_confidence
+    ):
+        return False
+    in_frame = (
+        (mouth[:, 0] >= 0.0)
+        & (mouth[:, 0] < frame_width)
+        & (mouth[:, 1] >= 0.0)
+        & (mouth[:, 1] < frame_height)
+    )
+    return float(in_frame.mean()) >= policy.min_mouth_landmarks_in_frame_ratio
+
+
 class FaceLandmarker(Protocol):
     """Backend interface used by the deterministic temporal tracker."""
 
@@ -178,6 +218,8 @@ class TrackedFaceSequence:
     landmark_scores: np.ndarray
     detection_confidences: np.ndarray
     detected: np.ndarray
+    mouth_visible_raw: np.ndarray
+    mouth_visible: np.ndarray
     ambiguous: np.ndarray
     rejected_candidates: int
     candidate_rejection_reasons: dict[str, int]
@@ -200,37 +242,49 @@ class TrackedFaceSequence:
         return self.detected_frames / self.frame_count
 
     @property
+    def mouth_visible_frames(self) -> int:
+        return int(self.mouth_visible.sum())
+
+    @property
+    def visual_coverage(self) -> float:
+        return self.mouth_visible_frames / self.frame_count
+
+    @property
+    def raw_mouth_visible_frames(self) -> int:
+        return int(self.mouth_visible_raw.sum())
+
+    @property
     def ambiguous_frames(self) -> int:
         return int(self.ambiguous.sum())
 
     @property
     def quality_issues(self) -> list[str]:
         issues: list[str] = []
-        if self.detected_frames < self.policy.min_detected_frames:
+        if self.mouth_visible_frames < self.policy.min_detected_frames:
             issues.append(
-                "detected_frames_below_minimum:"
-                f"{self.detected_frames}<{self.policy.min_detected_frames}"
+                "mouth_visible_frames_below_minimum:"
+                f"{self.mouth_visible_frames}<{self.policy.min_detected_frames}"
             )
-        if self.detection_rate < self.policy.min_detection_rate:
+        if self.visual_coverage < self.policy.min_detection_rate:
             issues.append(
-                "detection_rate_below_minimum:"
-                f"{self.detection_rate:.6f}<{self.policy.min_detection_rate:.6f}"
+                "visual_coverage_below_minimum:"
+                f"{self.visual_coverage:.6f}<{self.policy.min_detection_rate:.6f}"
             )
-        longest_gap = maximum_false_run(self.detected)
+        longest_gap = maximum_false_run(self.mouth_visible)
         if longest_gap > self.policy.max_missing_run:
             issues.append(
                 f"maximum_missing_run_exceeded:{longest_gap}>"
                 f"{self.policy.max_missing_run}"
             )
-        leading_gap, trailing_gap = edge_false_runs(self.detected)
+        leading_gap, trailing_gap = edge_false_runs(self.mouth_visible)
         if leading_gap > self.policy.max_edge_missing_run:
             issues.append(
-                "leading_missing_run_exceeded:"
+                "leading_visual_gap_exceeded:"
                 f"{leading_gap}>{self.policy.max_edge_missing_run}"
             )
         if trailing_gap > self.policy.max_edge_missing_run:
             issues.append(
-                "trailing_missing_run_exceeded:"
+                "trailing_visual_gap_exceeded:"
                 f"{trailing_gap}>{self.policy.max_edge_missing_run}"
             )
         if self.ambiguous_frames > self.policy.max_ambiguous_frames:
@@ -253,10 +307,14 @@ class TrackedFaceSequence:
         frame_area = self.media.video_width * self.media.video_height
         face_area_ratios = widths * heights / frame_area
         quality_issues = self.quality_issues
-        leading_gap, trailing_gap = edge_false_runs(self.detected)
+        leading_gap, trailing_gap = edge_false_runs(self.mouth_visible)
+        filled_frames = int((~self.mouth_visible_raw & self.mouth_visible).sum())
+        suppressed_frames = int((self.mouth_visible_raw & ~self.mouth_visible).sum())
         warnings: list[str] = []
         if self.interpolated_frames:
             warnings.append("missing_detections_interpolated")
+        if filled_frames:
+            warnings.append("short_visual_gaps_interpolated_for_display")
         return {
             "status": "passed" if not quality_issues else "failed",
             "quality_status": "passed" if not quality_issues else "failed",
@@ -278,18 +336,23 @@ class TrackedFaceSequence:
             "interpolated_frames": self.interpolated_frames,
             "detection_rate": self.detection_rate,
             "ambiguous_frames": self.ambiguous_frames,
+            "mouth_visible_raw_frames": self.raw_mouth_visible_frames,
+            "mouth_visible_frames": self.mouth_visible_frames,
+            "visual_coverage": self.visual_coverage,
+            "short_gap_frames_filled": filled_frames,
+            "short_valid_frames_suppressed": suppressed_frames,
             "rejected_candidates": self.rejected_candidates,
             "candidate_rejection_reasons": dict(self.candidate_rejection_reasons),
             "association_rejected_frames": self.association_rejected_frames,
-            "maximum_missing_run": maximum_false_run(self.detected),
-            "leading_missing_run": leading_gap,
-            "trailing_missing_run": trailing_gap,
+            "maximum_missing_run": maximum_false_run(self.mouth_visible),
+            "leading_visual_gap": leading_gap,
+            "trailing_visual_gap": trailing_gap,
             "mean_detection_confidence": float(valid_confidences.mean()),
             "mean_landmark_confidence": float(valid_landmark_scores.mean()),
             "minimum_face_area_ratio": float(face_area_ratios.min()),
             "median_face_area_ratio": float(np.median(face_area_ratios)),
             "visual_availability": build_visual_availability(
-                self.detected,
+                self.mouth_visible,
                 self.frame_rate,
             ),
         }
@@ -534,7 +597,10 @@ def _candidate_rejection_reason(
         visible_height = max(0.0, min(y2, frame_height) - max(y1, 0.0))
         visible_area = visible_width * visible_height
         out_of_frame_ratio = 1.0 - visible_area / area
-        if out_of_frame_ratio > policy.max_out_of_frame_ratio:
+        mouth_is_visible = mouth_landmarks_visible(
+            candidate, frame_size=frame_size, policy=policy
+        )
+        if out_of_frame_ratio > policy.max_out_of_frame_ratio and not mouth_is_visible:
             return "bounding_box_too_far_outside_frame"
         effective_area = visible_area
         effective_frame_area = frame_width * frame_height
@@ -632,10 +698,15 @@ def decide_tracked_face(
         area_change = max(
             candidate_area / previous_area, previous_area / candidate_area
         )
-        if area_change > policy.max_face_area_change_ratio:
+        iou, normalized_distance, score = _tracking_metrics(candidate, previous_box)
+        scale_reacquisition = (
+            len(valid) == 1 and normalized_distance <= policy.max_center_distance_ratio
+        )
+        if area_change > policy.max_face_area_change_ratio and not scale_reacquisition:
             rejected_reasons.append("face_area_change_exceeded")
             continue
-        iou, normalized_distance, score = _tracking_metrics(candidate, previous_box)
+        if area_change > policy.max_face_area_change_ratio:
+            score -= 0.25 * math.log(area_change)
         if (
             iou >= policy.min_association_iou
             or normalized_distance <= policy.max_center_distance_ratio
@@ -730,6 +801,43 @@ def edge_false_runs(mask: np.ndarray) -> tuple[int, int]:
     return leading, trailing
 
 
+def stabilize_visual_availability(
+    mask: np.ndarray,
+    *,
+    max_short_gap: int,
+    min_valid_run: int,
+) -> np.ndarray:
+    """Suppress isolated valid blips and bridge only short internal dropouts."""
+    values = np.asarray(mask, dtype=np.bool_)
+    if values.ndim != 1:
+        raise ValueError("mask must be one-dimensional.")
+    if max_short_gap < 0:
+        raise ValueError("max_short_gap must be non-negative.")
+    if min_valid_run < 1:
+        raise ValueError("min_valid_run must be positive.")
+    result = values.copy()
+
+    def runs(target: bool) -> Iterator[tuple[int, int]]:
+        index = 0
+        while index < len(result):
+            if bool(result[index]) != target:
+                index += 1
+                continue
+            start = index
+            while index < len(result) and bool(result[index]) == target:
+                index += 1
+            yield start, index
+
+    for start, end in list(runs(True)):
+        if end - start < min_valid_run:
+            result[start:end] = False
+
+    for start, end in list(runs(False)):
+        if start > 0 and end < len(result) and end - start <= max_short_gap:
+            result[start:end] = True
+    return result
+
+
 def build_visual_availability(
     detected: np.ndarray,
     frame_rate: int,
@@ -747,9 +855,7 @@ def build_visual_availability(
         if not is_detected and missing_start is None:
             missing_start = frame_index
         if is_detected and missing_start is not None:
-            intervals.append(
-                _missing_interval(missing_start, frame_index, frame_rate)
-            )
+            intervals.append(_missing_interval(missing_start, frame_index, frame_rate))
             missing_start = None
     if missing_start is not None:
         intervals.append(_missing_interval(missing_start, len(mask), frame_rate))
@@ -822,6 +928,7 @@ def build_tracked_sequence(
     scores = np.full((frame_count, LANDMARK_COUNT), np.nan, dtype=np.float32)
     confidences = np.full(frame_count, np.nan, dtype=np.float32)
     detected = np.zeros(frame_count, dtype=np.bool_)
+    mouth_visible_raw = np.zeros(frame_count, dtype=np.bool_)
     ambiguous = np.zeros(frame_count, dtype=np.bool_)
     rejection_counts: Counter[str] = Counter()
     association_rejected_frames = 0
@@ -849,8 +956,26 @@ def build_tracked_sequence(
         scores[frame_index] = selected.landmark_scores
         confidences[frame_index] = selected.detection_confidence
         detected[frame_index] = True
+        mouth_visible_raw[frame_index] = mouth_landmarks_visible(
+            selected,
+            frame_size=(media.video_width, media.video_height),
+            policy=active_policy,
+        )
         previous_box = selected.bounding_box
 
+    if not detected.any() and any(candidates_by_frame):
+        reasons = ", ".join(
+            f"{name}={count}" for name, count in sorted(rejection_counts.items())
+        )
+        raise MediaInputError(
+            "Face candidates were detected, but none passed the tracking quality "
+            f"gates ({reasons or 'no accepted candidates'})."
+        )
+    mouth_visible = stabilize_visual_availability(
+        mouth_visible_raw,
+        max_short_gap=active_policy.max_short_visual_gap,
+        min_valid_run=active_policy.min_visual_run,
+    )
     interpolated_landmarks = interpolate_missing_rows(landmarks, detected)
     interpolated_boxes = interpolate_missing_rows(boxes, detected)
     return TrackedFaceSequence(
@@ -868,6 +993,8 @@ def build_tracked_sequence(
         detected=detected,
         ambiguous=ambiguous,
         rejected_candidates=sum(rejection_counts.values()),
+        mouth_visible_raw=mouth_visible_raw,
+        mouth_visible=mouth_visible,
         candidate_rejection_reasons=dict(sorted(rejection_counts.items())),
         association_rejected_frames=association_rejected_frames,
     )
@@ -944,6 +1071,8 @@ def save_face_tracking_artifacts(
         landmark_scores=sequence.landmark_scores,
         detection_confidences=sequence.detection_confidences,
         detected=sequence.detected,
+        mouth_visible_raw=sequence.mouth_visible_raw,
+        mouth_visible=sequence.mouth_visible,
         original_resolution=np.asarray(
             [sequence.media.video_width, sequence.media.video_height],
             dtype=np.int32,

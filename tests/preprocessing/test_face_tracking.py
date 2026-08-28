@@ -17,6 +17,7 @@ from viavsr.preprocessing.face_tracking import (
     save_face_tracking_artifacts,
     scaled_detection_size,
     select_tracked_face,
+    stabilize_visual_availability,
     track_face_landmarks,
 )
 from viavsr.preprocessing.media import MediaMetadata
@@ -170,6 +171,30 @@ def test_build_visual_availability_reports_every_missing_interval() -> None:
     ]
 
 
+def test_stabilize_visual_availability_removes_flicker_only() -> None:
+    raw = np.asarray(
+        [
+            False,
+            True,
+            False,
+            True,
+            True,
+            False,
+            True,
+            True,
+            False,
+            False,
+            False,
+            True,
+            False,
+        ]
+    )
+
+    result = stabilize_visual_availability(raw, max_short_gap=1, min_valid_run=2)
+
+    assert result.tolist() == [False] * 3 + [True] * 5 + [False] * 5
+
+
 def test_build_tracked_sequence_interpolates_missing_frame() -> None:
     frame_zero = _candidate((10, 10, 50, 50), landmark_value=0.0)
     frame_one = _candidate((12, 12, 52, 52), landmark_value=2.0)
@@ -227,11 +252,13 @@ def test_save_face_tracking_artifacts_writes_numeric_npz_and_json(tmp_path) -> N
         assert artifact["processing_resolution"].tolist() == [640, 360]
         assert artifact["frame_rate"].tolist() == [25]
         assert artifact["quality_passed"].tolist() == [True]
-        assert artifact["artifact_version"].tolist() == [1]
+        assert artifact["mouth_visible_raw"].tolist() == [True, True]
+        assert artifact["mouth_visible"].tolist() == [True, True]
+        assert artifact["artifact_version"].tolist() == [2]
 
     saved_report = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["quality_status"] == "passed"
-    assert payload["artifact_version"] == 1
+    assert payload["artifact_version"] == 2
     assert payload["landmark_topology"] == "ibug_68"
     assert "identity_switches_prevented" not in payload
     assert saved_report["detection_rate"] == 1.0
@@ -279,6 +306,7 @@ def test_long_missing_run_fails_sequence_quality() -> None:
         min_face_area_ratio=0.0,
         min_detection_rate=0.2,
         max_missing_run=5,
+        min_visual_run=1,
     )
     start = _candidate((100, 100, 300, 300), landmark_value=0.0)
     end = _candidate((102, 100, 302, 300), landmark_value=7.0)
@@ -341,7 +369,10 @@ def test_quality_policy_rejects_invalid_threshold_types_and_values(
             _candidate((10, 10, 110, 110), confidence=float("nan")),
             "non_finite_detection_confidence",
         ),
-        (_candidate((-200, 10, -100, 110)), "bounding_box_too_far_outside_frame"),
+        (
+            _candidate((-200, 10, -100, 110), landmark_value=-150),
+            "bounding_box_too_far_outside_frame",
+        ),
         (_candidate((10, 10, 20, 20)), "face_area_below_minimum"),
         (
             _candidate((10, 10, 110, 110), landmark_confidence=0.1),
@@ -362,7 +393,22 @@ def test_candidate_quality_gate_reports_rejection_reason(candidate, reason) -> N
     assert decision.rejected_reasons == (reason,)
 
 
-def test_association_gate_rejects_implausible_face_area_change() -> None:
+def test_candidate_with_cropped_face_box_is_accepted_when_mouth_is_visible() -> None:
+    candidate = _candidate((-50, -50, 150, 150), landmark_value=50)
+
+    decision = decide_tracked_face(
+        [candidate],
+        None,
+        frame_area=1920 * 1080,
+        frame_size=(1920, 1080),
+        policy=FaceTrackingQualityPolicy(),
+    )
+
+    assert decision.status == "accepted"
+    assert decision.candidate is candidate
+
+
+def test_single_speaker_scale_change_is_reacquired() -> None:
     previous = np.asarray([10, 10, 110, 110], dtype=np.float32)
     much_larger = _candidate((-25, -25, 145, 145))
 
@@ -377,8 +423,29 @@ def test_association_gate_rejects_implausible_face_area_change() -> None:
         ),
     )
 
+    assert decision.status == "accepted"
+
+
+def test_scale_reacquisition_does_not_bypass_multi_face_identity_gate() -> None:
+    previous = np.asarray([10, 10, 110, 110], dtype=np.float32)
+    much_larger = _candidate((-25, -25, 145, 145))
+    distant_decoy = _candidate((1000, 700, 1100, 800))
+
+    decision = decide_tracked_face(
+        [much_larger, distant_decoy],
+        previous,
+        frame_area=1920 * 1080,
+        frame_size=(1920, 1080),
+        policy=FaceTrackingQualityPolicy(
+            min_face_area_ratio=0.0,
+            max_out_of_frame_ratio=1.0,
+        ),
+    )
+
     assert decision.status == "missing"
+    assert decision.candidate is None
     assert "face_area_change_exceeded" in decision.rejected_reasons
+    assert "association_gate_failed" in decision.rejected_reasons
 
 
 def test_edge_extrapolation_fails_sequence_quality_by_default() -> None:
@@ -399,8 +466,8 @@ def test_edge_extrapolation_fails_sequence_quality_by_default() -> None:
     )
 
     assert not sequence.quality_passed
-    assert "leading_missing_run_exceeded:1>0" in sequence.quality_issues
-    assert sequence.report()["leading_missing_run"] == 1
+    assert "leading_visual_gap_exceeded:1>0" in sequence.quality_issues
+    assert sequence.report()["leading_visual_gap"] == 1
 
 
 def test_tracking_cli_invalidates_stale_artifact_on_tracking_failure(

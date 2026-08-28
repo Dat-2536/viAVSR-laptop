@@ -40,6 +40,8 @@ class FaceTrackArtifact:
 
     landmarks: np.ndarray
     detected: np.ndarray
+    mouth_visible_raw: np.ndarray
+    mouth_visible: np.ndarray
     original_width: int
     original_height: int
     frame_rate: int
@@ -82,6 +84,7 @@ class MouthROIDisplayResult:
     frame_rate: int
     mouth_roi_size: int
     detected_frames: int
+    mouth_visible_frames: int
     no_signal_frames: int
     visual_availability: dict[str, Any]
     output_media: MediaMetadata
@@ -137,6 +140,18 @@ def load_face_track_artifact(
                 payload["artifact_version"],
                 dtype=np.int32,
             )
+            if (
+                artifact_version_value.shape == (1,)
+                and int(artifact_version_value[0]) == FACE_TRACK_ARTIFACT_VERSION
+            ):
+                mouth_visible_raw = np.asarray(
+                    payload["mouth_visible_raw"], dtype=np.bool_
+                ).copy()
+                mouth_visible = np.asarray(
+                    payload["mouth_visible"], dtype=np.bool_
+                ).copy()
+            else:
+                mouth_visible_raw = mouth_visible = detected.copy()
             quality_passed_value = np.asarray(payload["quality_passed"], dtype=np.bool_)
     except (OSError, ValueError, KeyError) as exc:
         raise MediaInputError(
@@ -150,6 +165,10 @@ def load_face_track_artifact(
         )
     if detected.shape != (len(landmarks),):
         raise MediaInputError("Face-track detection mask has the wrong shape.")
+    if mouth_visible_raw.shape != (len(landmarks),) or mouth_visible.shape != (
+        len(landmarks),
+    ):
+        raise MediaInputError("Face-track mouth-visibility masks have wrong shapes.")
     if (
         original_resolution.shape != (2,)
         or frame_rate_value.shape != (1,)
@@ -164,10 +183,10 @@ def load_face_track_artifact(
     if width <= 0 or height <= 0 or frame_rate <= 0:
         raise MediaInputError("Face-track dimensions and frame rate must be positive.")
     artifact_version = int(artifact_version_value[0])
-    if artifact_version != FACE_TRACK_ARTIFACT_VERSION:
+    if artifact_version not in (1, FACE_TRACK_ARTIFACT_VERSION):
         raise MediaInputError(
             "Unsupported face-track artifact version "
-            f"{artifact_version}; expected {FACE_TRACK_ARTIFACT_VERSION}. "
+            f"{artifact_version}; supported versions are 1 and {FACE_TRACK_ARTIFACT_VERSION}. "
             "Rerun scripts/track_webcam_faces.py."
         )
     quality_passed = bool(quality_passed_value[0])
@@ -180,6 +199,8 @@ def load_face_track_artifact(
         landmarks=landmarks,
         detected=detected,
         original_width=width,
+        mouth_visible_raw=mouth_visible_raw,
+        mouth_visible=mouth_visible,
         original_height=height,
         frame_rate=frame_rate,
         artifact_version=artifact_version,
@@ -521,9 +542,9 @@ def export_mouth_roi_display_video(
                 raise MediaInputError(
                     "Decoded video has more frames than the face-track artifact."
                 )
-            detected = track is not None and bool(track.detected[frame_index])
-            signal_mask.append(detected)
-            if detected:
+            mouth_visible = track is not None and bool(track.mouth_visible[frame_index])
+            signal_mask.append(mouth_visible)
+            if mouth_visible:
                 assert smoothed is not None
                 assert reference is not None
                 yield align_and_crop_mouth_frame(
@@ -559,7 +580,8 @@ def export_mouth_roi_display_video(
     )
     output_metadata = probe_av_media(output)
     validate_demo_media(output_metadata)
-    detected_frames = int(sum(signal_mask))
+    mouth_visible_frames = int(sum(signal_mask))
+    detected_frames = int(track.detected.sum()) if track is not None else 0
     return MouthROIDisplayResult(
         source_path=str(source),
         track_path=str(track_file) if track_file is not None else None,
@@ -568,7 +590,8 @@ def export_mouth_roi_display_video(
         frame_rate=frame_rate,
         mouth_roi_size=MOUTH_ROI_SIZE,
         detected_frames=detected_frames,
-        no_signal_frames=encoded_frames - detected_frames,
+        mouth_visible_frames=mouth_visible_frames,
+        no_signal_frames=encoded_frames - mouth_visible_frames,
         visual_availability=availability,
         output_media=output_metadata,
     )
