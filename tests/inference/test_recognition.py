@@ -17,6 +17,7 @@ from viavsr.preprocessing.media import MediaMetadata, PreparedAVInput
 class _FakeEncoder:
     def __init__(self) -> None:
         self.seen_video: torch.Tensor | None = torch.empty(0)
+        self.seen_visual_availability: torch.Tensor | None = None
 
     def __call__(
         self, *, input_features: torch.Tensor, video: torch.Tensor | None
@@ -29,9 +30,11 @@ class _FakeEncoder:
         self,
         source: dict[str, torch.Tensor | None],
         padding_mask: torch.Tensor | None = None,
+        visual_availability: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, None]:
         del padding_mask
         self.seen_video = source["video"]
+        self.seen_visual_availability = visual_availability
         return torch.zeros((1, 6, 4)), None
 
 
@@ -170,6 +173,48 @@ def test_recognize_prepared_av_runs_audio_only_fallback() -> None:
     assert model.avsr.encoder.seen_video is None
     assert result.inference_mode == "audio_only_fallback"
     assert result.visual_input_used is False
+
+
+def test_recognize_prepared_av_applies_interval_visual_gate() -> None:
+    model = _FakeModel()
+    assets = SimpleNamespace(model=model, tokenizer=_FakeTokenizer())
+    mask = torch.tensor([[True, True, False, False, True, True]])
+    base = _prepared()
+    prepared = PreparedAVInput(
+        videos=torch.ones_like(base.videos),
+        audios=base.audios,
+        video_lengths=base.video_lengths,
+        audio_lengths=base.audio_lengths,
+        metadata=base.metadata,
+        visual_availability=mask,
+    )
+
+    result = recognize_prepared_av(
+        assets,  # type: ignore[arg-type]
+        prepared,
+        inference_mode="audio_visual_interval_gated",
+    )
+
+    seen_video = model.avsr.encoder.seen_video
+    assert seen_video is not None
+    assert torch.all(seen_video[:, :, :2] == 1)
+    assert torch.all(seen_video[:, :, 2:4] == 0)
+    assert torch.all(seen_video[:, :, 4:] == 1)
+    assert torch.equal(model.avsr.encoder.seen_visual_availability, mask)
+    assert result.inference_mode == "audio_visual_interval_gated"
+    assert result.visual_coverage == pytest.approx(4 / 6)
+    assert result.visual_masked_frames == 2
+
+
+def test_interval_visual_gate_requires_availability_mask() -> None:
+    assets = SimpleNamespace(model=_FakeModel(), tokenizer=_FakeTokenizer())
+
+    with pytest.raises(InferenceError, match="requires visual_availability"):
+        recognize_prepared_av(
+            assets,  # type: ignore[arg-type]
+            _prepared(),
+            inference_mode="audio_visual_interval_gated",
+        )
 
 
 def test_recognize_prepared_av_rejects_feature_length_mismatch() -> None:

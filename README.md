@@ -210,22 +210,38 @@ Add `--reference-text "the exact sentence spoken in the video"` to calculate
 WER/CER. The model device and dtype come from `configs/config.yaml`; the
 tracking device is selected independently with `--tracking-device`.
 
-A run writes a self-contained directory named after the input stem:
+By default, each run retains only the final UI mouth-ROI video and consolidated
+JSON report:
 
 ~~~text
 outputs/demo/webcam_001/
-  face_track.npz
-  face_tracking.json
-  mouth96.mp4
-  mouth_roi.json
+  mouth_roi.mp4
   report.json
 ~~~
 
-The final report contains raw-media metadata, face-quality diagnostics,
-preprocessed tensor shapes, model/tokenizer metadata, decoder parameters,
-transcript, timings, and optional WER/CER. The command exits non-zero on failure.
-It also deletes stale artifacts for the same input stem before starting and
-stops before mouth extraction or model loading when the face-quality gate fails.
+The report contains raw-media metadata, face-quality diagnostics, preprocessed
+tensor shapes, model/tokenizer metadata, modality decisions, decoder parameters,
+transcript, timings, and optional WER/CER. If visual preprocessing is unusable,
+the default `whole_utterance` policy transcribes from audio only.
+
+An experimental interval-level policy is available for recordings where visual
+data is missing only during parts of the utterance:
+
+~~~bash
+python scripts/run_avsr_demo.py \
+  --config configs/config.yaml \
+  --media samples/webcam/webcam_001.mp4 \
+  --visual-fallback-policy interval_gated
+~~~
+
+This mode zeros unavailable mouth frames before the visual frontend and zeros
+their visual features again before audio/visual fusion. It preserves usable
+visual intervals, but the released checkpoint was not specifically trained for
+this masking policy, so compare its WER/CER against the default fallback.
+
+Add `--keep-intermediates` when debugging. Transient face tracks, stage reports,
+and the inference-only ROI are then retained under `outputs/demo/<stem>/.work/`.
+Without that flag they are deleted after the consolidated report is written.
 
 ### Manual stage-by-stage workflow
 

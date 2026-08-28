@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
 
@@ -10,10 +12,20 @@ from viavsr.preprocessing.mouth_roi import (
     align_and_crop_mouth_frame,
     create_no_signal_frame,
     estimate_alignment_transform,
+    export_aligned_mouth_roi_video,
     load_face_track_artifact,
     load_mean_face,
     smooth_landmarks,
 )
+
+
+def test_aligned_export_exposes_quality_override_as_keyword_only() -> None:
+    parameter = inspect.signature(export_aligned_mouth_roi_video).parameters[
+        "require_quality_passed"
+    ]
+
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is True
 
 
 def test_create_no_signal_frame_is_visible_grayscale_placeholder() -> None:

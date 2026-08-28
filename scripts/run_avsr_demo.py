@@ -70,6 +70,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         help="Override the configured face-detection confidence threshold.",
     )
+    parser.add_argument(
+        "--visual-fallback-policy",
+        choices=("whole_utterance", "interval_gated"),
+        default="whole_utterance",
+        help="Visual-gap policy (interval_gated is experimental).",
+    )
+    parser.add_argument(
+        "--keep-intermediates",
+        action="store_true",
+        help="Retain face tracks and inference-only ROI files under .work/.",
+    )
+
     return parser
 
 
@@ -88,6 +100,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         frame_rate=args.frame_rate,
         max_detection_size=args.max_detection_size,
         confidence_threshold=args.confidence_threshold,
+        visual_fallback_policy=args.visual_fallback_policy,
+        keep_intermediates=args.keep_intermediates,
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload["status"] == "passed" else 1

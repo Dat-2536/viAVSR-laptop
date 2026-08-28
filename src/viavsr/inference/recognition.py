@@ -20,6 +20,7 @@ from .schemas import InferenceResult, LoadedAVSRAssets
 DecoderName = Literal["ctc_greedy", "joint_beam_search"]
 InferenceMode = Literal[
     "audio_visual",
+    "audio_visual_interval_gated",
     "audio_only_experimental",
     "audio_only_fallback",
 ]
@@ -77,6 +78,14 @@ def _validate_prepared_input(prepared: PreparedAVInput) -> None:
             "audio_lengths does not match the prepared audio tensor.",
             stage="inference_input",
         )
+    availability = prepared.visual_availability
+    if availability is not None and (
+        availability.ndim != 2 or tuple(availability.shape) != (1, expected_frames)
+    ):
+        raise InferenceError(
+            "visual_availability must have shape [1, T] matching the video.",
+            stage="inference_input",
+        )
 
 
 def _model_device_and_dtype(model: Any) -> tuple[torch.device, torch.dtype]:
@@ -109,6 +118,9 @@ def recognize_prepared_av(
     branch. audio_only_experimental is an explicit caller request, while
     audio_only_fallback records an automatic orchestration decision after
     visual preprocessing could not provide a trustworthy input.
+
+    audio_visual_interval_gated requires a frame-aligned visual availability
+    mask and removes unavailable visual features before fusion.
     """
     _validate_prepared_input(prepared)
     if decoder not in {"ctc_greedy", "joint_beam_search"}:
@@ -118,6 +130,7 @@ def recognize_prepared_av(
         )
     if inference_mode not in {
         "audio_visual",
+        "audio_visual_interval_gated",
         "audio_only_experimental",
         "audio_only_fallback",
     }:
@@ -130,7 +143,29 @@ def recognize_prepared_av(
     device, dtype = _model_device_and_dtype(model)
     videos = prepared.videos.to(device=device, dtype=dtype)
     audios = prepared.audios.to(device=device, dtype=dtype)
-    encoder_video = videos if inference_mode == "audio_visual" else None
+    availability = prepared.visual_availability
+    if inference_mode == "audio_visual_interval_gated" and availability is None:
+        raise InferenceError(
+            "Interval-gated inference requires visual_availability.",
+            stage="inference_input",
+        )
+    availability_device = (
+        availability.to(device=device) if availability is not None else None
+    )
+    encoder_video = (
+        videos
+        if inference_mode in {"audio_visual", "audio_visual_interval_gated"}
+        else None
+    )
+    if inference_mode == "audio_visual_interval_gated":
+        assert encoder_video is not None
+        assert availability_device is not None
+        encoder_video = encoder_video * availability_device[:, None, :, None, None]
+    visual_coverage: float | None = None
+    visual_masked_frames: int | None = None
+    if availability_device is not None:
+        visual_coverage = float(availability_device.float().mean().item())
+        visual_masked_frames = int((~availability_device.bool()).sum().item())
     model.eval()
     hypothesis_score: float | None = None
 
@@ -138,7 +173,16 @@ def recognize_prepared_av(
         _synchronize(device)
         started = time.perf_counter()
         with torch.inference_mode():
-            if encoder_video is None:
+            if inference_mode == "audio_visual_interval_gated":
+                features, _ = model.avsr.encoder.extract_finetune(
+                    {
+                        "audio": audios,
+                        "video": encoder_video,
+                    },
+                    padding_mask=None,
+                    visual_availability=availability_device,
+                )
+            elif encoder_video is None:
                 features, _ = model.avsr.encoder.extract_finetune(
                     {
                         "audio": audios,
@@ -193,6 +237,8 @@ def recognize_prepared_av(
         dtype=str(dtype).removeprefix("torch."),
         inference_mode=inference_mode,
         visual_input_used=encoder_video is not None,
+        visual_coverage=visual_coverage,
+        visual_masked_frames=visual_masked_frames,
         beam_size=beam_size if decoder == "joint_beam_search" else None,
         ctc_weight=ctc_weight if decoder == "joint_beam_search" else None,
         hypothesis_score=hypothesis_score,

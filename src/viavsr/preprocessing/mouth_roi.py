@@ -421,13 +421,16 @@ def export_aligned_mouth_roi_video(
     output_path: Path | str,
     *,
     mean_face_path: Path | str = MEAN_FACE_PATH,
+    require_quality_passed: bool = True,
 ) -> MouthROIExportResult:
     """Export an aligned 96x96 mouth video with synchronized source audio."""
     source = Path(source_path).expanduser().resolve()
     track_file = Path(track_path).expanduser().resolve()
     output = Path(output_path).expanduser().resolve()
     source_metadata = probe_av_media(source)
-    track = load_face_track_artifact(track_file)
+    track = load_face_track_artifact(
+        track_file, require_quality_passed=require_quality_passed
+    )
     if (track.original_width, track.original_height) != (
         source_metadata.video_width,
         source_metadata.video_height,

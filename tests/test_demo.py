@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from viavsr import demo
@@ -57,7 +58,11 @@ def _install_successful_stages(
         assert max_detection_size == 640
         assert isinstance(policy, FaceTrackingQualityPolicy)
         calls.append("track")
-        return SimpleNamespace(quality_passed=True, quality_issues=[])
+        return SimpleNamespace(
+            quality_passed=True,
+            quality_issues=[],
+            mouth_visible=np.ones(100, dtype=np.bool_),
+        )
 
     monkeypatch.setattr(demo, "track_face_landmarks", track)
 
@@ -95,7 +100,13 @@ def _install_successful_stages(
 
     monkeypatch.setattr(demo, "export_mouth_roi_display_video", export_display)
 
-    def export_mouth(_media, _track, output: Path):
+    def export_mouth(
+        _media,
+        _track,
+        output: Path,
+        *,
+        require_quality_passed: bool,
+    ):
         calls.append("mouth")
         output.write_bytes(b"mouth")
         return SimpleNamespace(
@@ -267,7 +278,7 @@ def test_end_to_end_demo_writes_consolidated_success_report(
 
     paths = demo.DemoArtifactPaths.for_media(raw_media, tmp_path / "outputs")
     assert payload["status"] == "passed"
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["stage"] == "complete"
     assert payload["evaluation"] == {"wer": 0.0, "cer": 0.0}
     assert payload["request"]["decoder"] == "joint_beam_search"
@@ -277,8 +288,11 @@ def test_end_to_end_demo_writes_consolidated_success_report(
         "interpolated_landmarks"
     )
     assert json.loads(paths.report.read_text(encoding="utf-8")) == payload
-    assert paths.face_track.is_file()
-    assert paths.mouth_roi.is_file()
+    assert "/.work/" not in paths.report.read_text(encoding="utf-8")
+    assert not paths.face_track.exists()
+    assert not paths.mouth_roi.exists()
+    assert not paths.work_directory.exists()
+    assert set(payload["artifacts"]) == {"run_directory", "mouth_roi", "report"}
     assert paths.mouth_roi_display.is_file()
     assert calls == [
         "track",
@@ -290,6 +304,114 @@ def test_end_to_end_demo_writes_consolidated_success_report(
         "load_model",
         "infer",
     ]
+
+
+def test_debug_flag_retains_intermediate_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_media = tmp_path / "webcam_debug.mp4"
+    raw_media.write_bytes(b"raw")
+    calls: list[str] = []
+    _install_successful_stages(monkeypatch, raw_media=raw_media, calls=calls)
+
+    payload = demo.run_end_to_end_demo(
+        config_path=tmp_path / "config.yaml",
+        media_path=raw_media,
+        output_root=tmp_path / "outputs",
+        keep_intermediates=True,
+    )
+
+    paths = demo.DemoArtifactPaths.for_media(raw_media, tmp_path / "outputs")
+    assert payload["status"] == "passed"
+    assert paths.work_directory.is_dir()
+    assert paths.face_track.is_file()
+    assert paths.face_tracking_report.is_file()
+    assert paths.mouth_roi.is_file()
+    assert paths.mouth_roi_report.is_file()
+    assert paths.mouth_roi_display_report.is_file()
+    assert "work_directory" in payload["artifacts"]
+
+
+def test_interval_policy_uses_partial_track_instead_of_whole_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_media = tmp_path / "partial.mp4"
+    raw_media.write_bytes(b"raw")
+    calls: list[str] = []
+    _install_successful_stages(monkeypatch, raw_media=raw_media, calls=calls)
+    visual_mask = np.r_[
+        np.ones(40, dtype=np.bool_),
+        np.zeros(20, dtype=np.bool_),
+        np.ones(40, dtype=np.bool_),
+    ]
+    sequence = SimpleNamespace(
+        quality_passed=False,
+        quality_issues=["missing_run_above_maximum:20>5"],
+        mouth_visible=visual_mask,
+    )
+    monkeypatch.setattr(
+        demo,
+        "track_face_landmarks",
+        lambda *_args, **_kwargs: calls.append("track") or sequence,
+    )
+
+    def export_mouth(_media, _track, output: Path, *, require_quality_passed: bool):
+        assert require_quality_passed is False
+        calls.append("mouth")
+        output.write_bytes(b"mouth")
+        return SimpleNamespace(to_dict=lambda: {"output_path": str(output)})
+
+    monkeypatch.setattr(demo, "export_aligned_mouth_roi_video", export_mouth)
+    prepared = SimpleNamespace(
+        metadata=_metadata(raw_media.with_name("mouth96.mp4"), mouth_roi=True),
+        shape_report=lambda: {
+            "videos": [1, 1, 100, 88, 88],
+            "visual_availability": [1, 100],
+        },
+    )
+
+    def prepare(_path, *, max_duration_seconds: float, visual_availability):
+        assert max_duration_seconds == 15.0
+        assert np.array_equal(visual_availability, visual_mask)
+        calls.append("prepare")
+        return prepared
+
+    monkeypatch.setattr(demo, "prepare_mouth_roi_media", prepare)
+    result = SimpleNamespace(
+        transcript="partial transcript",
+        inference_seconds=0.2,
+        to_dict=lambda: {
+            "transcript": "partial transcript",
+            "inference_mode": "audio_visual_interval_gated",
+            "visual_input_used": True,
+        },
+    )
+
+    def recognize(_assets, actual_prepared, **kwargs):
+        assert actual_prepared is prepared
+        assert kwargs["inference_mode"] == "audio_visual_interval_gated"
+        calls.append("infer")
+        return result
+
+    monkeypatch.setattr(demo, "recognize_prepared_av", recognize)
+
+    payload = demo.run_end_to_end_demo(
+        config_path=tmp_path / "config.yaml",
+        media_path=raw_media,
+        output_root=tmp_path / "outputs",
+        visual_fallback_policy="interval_gated",
+    )
+
+    assert payload["status"] == "passed"
+    assert payload["modality_decision"]["selected_mode"] == (
+        "audio_visual_interval_gated"
+    )
+    assert payload["modality_decision"]["visual_coverage"] == pytest.approx(0.8)
+    assert payload["modality_decision"]["experimental"] is True
+    assert "experimental_interval_gating_enabled" in payload["warnings"]
+    assert "prepare_audio" not in calls
 
 
 def test_display_export_failure_does_not_suppress_transcription(
@@ -321,8 +443,8 @@ def test_display_export_failure_does_not_suppress_transcription(
     assert payload["mouth_roi_display"]["used_for_inference"] is False
     assert "mouth_roi_display_unavailable" in payload["warnings"]
     assert not paths.mouth_roi_display.exists()
-    assert paths.mouth_roi_display_report.is_file()
-    assert paths.mouth_roi.is_file()
+    assert not paths.mouth_roi_display_report.exists()
+    assert not paths.mouth_roi.exists()
 
 
 def test_quality_failure_falls_back_to_audio_only(
@@ -346,6 +468,7 @@ def test_quality_failure_falls_back_to_audio_only(
     sequence = SimpleNamespace(
         quality_passed=False,
         quality_issues=["trailing_missing_run_above_maximum:8>0"],
+        mouth_visible=np.r_[np.ones(50, dtype=np.bool_), np.zeros(50, dtype=np.bool_)],
     )
     monkeypatch.setattr(
         demo,
@@ -389,7 +512,7 @@ def test_quality_failure_falls_back_to_audio_only(
         "visual_input_not_used"
     )
     assert payload["result"]["transcript"] == "audio transcript"
-    assert paths.face_track.is_file()
+    assert not paths.face_track.exists()
     assert not paths.mouth_roi.exists()
     assert paths.mouth_roi_display.is_file()
     assert payload["mouth_roi_display"]["visual_availability"]["coverage"] == 0.5
@@ -412,6 +535,7 @@ def test_no_face_error_invalidates_stale_visuals_and_falls_back(
     raw_media.write_bytes(b"raw")
     paths = demo.DemoArtifactPaths.for_media(raw_media, tmp_path / "outputs")
     paths.run_directory.mkdir(parents=True)
+    paths.work_directory.mkdir(parents=True)
     for stale_path in (
         paths.face_track,
         paths.face_tracking_report,
@@ -464,9 +588,9 @@ def test_no_face_error_invalidates_stale_visuals_and_falls_back(
     assert paths.mouth_roi_display.is_file()
     assert payload["mouth_roi_display"]["visual_availability"]["coverage"] == 0.0
     assert payload["face_tracking"]["visual_availability"]["missing_frames"] == 100
-    face_report = json.loads(paths.face_tracking_report.read_text(encoding="utf-8"))
-    assert face_report["status"] == "unavailable"
-    assert face_report["error"]["message"] == (
+    assert not paths.face_tracking_report.exists()
+    assert payload["face_tracking"]["status"] == "unavailable"
+    assert payload["face_tracking"]["error"]["message"] == (
         "No face was detected in any video frame."
     )
     assert json.loads(paths.report.read_text(encoding="utf-8"))["status"] == "passed"

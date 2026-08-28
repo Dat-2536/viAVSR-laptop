@@ -582,7 +582,15 @@ class AVHubertModel(PreTrainedModel):
         feature = res["features"] if ret_conv else res["x"]
         return feature, res["padding_mask"]
 
-    def extract_finetune(self, source, padding_mask=None, mask=False, ret_conv=False, output_layer=None):
+    def extract_finetune(
+        self,
+        source,
+        padding_mask=None,
+        mask=False,
+        ret_conv=False,
+        output_layer=None,
+        visual_availability=None,
+    ):
         src_audio, src_video = source['audio'], source['video']
         if mask and self.masking_type == 'input':
             src_video, _ = self.apply_input_mask(src_video, padding_mask, target_list=None)
@@ -597,6 +605,27 @@ class AVHubertModel(PreTrainedModel):
         elif src_audio is not None and src_video is not None:
             features_video = self.forward_features(src_video, modality='video')
             features_audio = self.forward_features(src_audio, modality='audio') # features: [B, F, T]
+        if visual_availability is not None:
+            if src_video is None:
+                raise ValueError("visual_availability requires video input")
+            availability = visual_availability.to(
+                device=features_video.device,
+                dtype=features_video.dtype,
+            )
+            if (
+                availability.ndim != 2
+                or availability.size(0) != features_video.size(0)
+            ):
+                raise ValueError(
+                    "visual_availability must have shape [batch, time]"
+                )
+            if availability.size(1) != features_video.size(-1):
+                availability = torch.nn.functional.interpolate(
+                    availability.unsqueeze(1),
+                    size=features_video.size(-1),
+                    mode="nearest",
+                ).squeeze(1)
+            features_video = features_video * availability.unsqueeze(1)
 
         if self.modality_fuse == 'concat':
             features = torch.cat([features_audio, features_video], dim=1)

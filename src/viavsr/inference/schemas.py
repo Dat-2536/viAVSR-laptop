@@ -68,10 +68,13 @@ class InferenceResult:
     dtype: str
     inference_mode: Literal[
         "audio_visual",
+        "audio_visual_interval_gated",
         "audio_only_experimental",
         "audio_only_fallback",
     ] = "audio_visual"
     visual_input_used: bool = True
+    visual_coverage: float | None = None
+    visual_masked_frames: int | None = None
     beam_size: int | None = None
     ctc_weight: float | None = None
     hypothesis_score: float | None = None

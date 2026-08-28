@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from viavsr.evaluation import evaluate_transcript
 from viavsr.inference import (
@@ -33,7 +33,8 @@ from viavsr.preprocessing import (
 from viavsr.preprocessing.face_tracking import DEFAULT_DETECTION_MAX_SIZE, DeviceRequest
 from viavsr.preprocessing.media import TARGET_FRAME_RATE
 
-DEMO_REPORT_SCHEMA_VERSION = 2
+DEMO_REPORT_SCHEMA_VERSION = 3
+VisualFallbackPolicy = Literal["whole_utterance", "interval_gated"]
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,7 @@ class DemoArtifactPaths:
     """Deterministic artifact paths for one raw-media demo run."""
 
     run_directory: Path
+    work_directory: Path
     face_track: Path
     face_tracking_report: Path
     mouth_roi: Path
@@ -52,33 +54,43 @@ class DemoArtifactPaths:
     @classmethod
     def for_media(cls, media_path: Path, output_root: Path) -> DemoArtifactPaths:
         run_directory = output_root.expanduser().resolve() / media_path.stem
+        work_directory = run_directory / ".work"
         return cls(
             run_directory=run_directory,
-            face_track=run_directory / "face_track.npz",
-            face_tracking_report=run_directory / "face_tracking.json",
-            mouth_roi=run_directory / "mouth96.mp4",
-            mouth_roi_report=run_directory / "mouth_roi.json",
-            mouth_roi_display=run_directory / "mouth96_display.mp4",
-            mouth_roi_display_report=run_directory / "mouth_roi_display.json",
+            work_directory=work_directory,
+            face_track=work_directory / "face_track.npz",
+            face_tracking_report=work_directory / "face_tracking.json",
+            mouth_roi=work_directory / "inference_mouth96.mp4",
+            mouth_roi_report=work_directory / "mouth_roi.json",
+            mouth_roi_display=run_directory / "mouth_roi.mp4",
+            mouth_roi_display_report=work_directory / "mouth_roi_display.json",
             report=run_directory / "report.json",
         )
 
-    def to_dict(self) -> dict[str, str]:
-        return {
+    def to_dict(self, *, include_intermediates: bool = False) -> dict[str, str]:
+        artifacts = {
             "run_directory": str(self.run_directory),
-            "face_track": str(self.face_track),
-            "face_tracking_report": str(self.face_tracking_report),
-            "mouth_roi": str(self.mouth_roi),
-            "mouth_roi_report": str(self.mouth_roi_report),
-            "mouth_roi_display": str(self.mouth_roi_display),
-            "mouth_roi_display_report": str(self.mouth_roi_display_report),
+            "mouth_roi": str(self.mouth_roi_display),
             "report": str(self.report),
         }
+        if include_intermediates:
+            artifacts.update(
+                {
+                    "work_directory": str(self.work_directory),
+                    "face_track": str(self.face_track),
+                    "face_tracking_report": str(self.face_tracking_report),
+                    "inference_mouth_roi": str(self.mouth_roi),
+                    "mouth_roi_report": str(self.mouth_roi_report),
+                    "mouth_roi_display_report": str(self.mouth_roi_display_report),
+                }
+            )
+        return artifacts
 
     def invalidate(self) -> None:
         """Remove only stale generated files for this exact media stem."""
 
         self.run_directory.mkdir(parents=True, exist_ok=True)
+        self.work_directory.mkdir(parents=True, exist_ok=True)
         for path in (
             self.face_track,
             self.face_tracking_report,
@@ -89,6 +101,31 @@ class DemoArtifactPaths:
             self.report,
         ):
             path.unlink(missing_ok=True)
+        for legacy_name in (
+            "face_track.npz",
+            "face_tracking.json",
+            "mouth96.mp4",
+            "mouth_roi.json",
+            "mouth96_display.mp4",
+            "mouth_roi_display.json",
+        ):
+            (self.run_directory / legacy_name).unlink(missing_ok=True)
+
+    def cleanup_intermediates(self) -> None:
+        """Remove only known transient artifacts for this exact run."""
+
+        for path in (
+            self.face_track,
+            self.face_tracking_report,
+            self.mouth_roi,
+            self.mouth_roi_report,
+            self.mouth_roi_display_report,
+        ):
+            path.unlink(missing_ok=True)
+        try:
+            self.work_directory.rmdir()
+        except OSError:
+            pass
 
 
 def _validate_run_options(
@@ -99,6 +136,7 @@ def _validate_run_options(
     max_duration_seconds: float,
     frame_rate: int,
     max_detection_size: int,
+    visual_fallback_policy: VisualFallbackPolicy,
 ) -> None:
     if decoder not in {"ctc_greedy", "joint_beam_search"}:
         raise ValueError(f"Unsupported decoder: {decoder}")
@@ -112,14 +150,43 @@ def _validate_run_options(
         raise ValueError("frame_rate must be greater than zero.")
     if max_detection_size <= 0:
         raise ValueError("max_detection_size must be greater than zero.")
+    if visual_fallback_policy not in {"whole_utterance", "interval_gated"}:
+        raise ValueError(
+            f"Unsupported visual fallback policy: {visual_fallback_policy}"
+        )
+
+
+def _prune_transient_paths(value: Any, work_directory: Path) -> Any:
+    """Remove report fields that point at deleted per-run work files."""
+
+    work_directory = work_directory.resolve()
+    if isinstance(value, dict):
+        return {
+            key: _prune_transient_paths(item, work_directory)
+            for key, item in value.items()
+            if not (
+                isinstance(item, str)
+                and Path(item).is_absolute()
+                and Path(item).is_relative_to(work_directory)
+            )
+        }
+    if isinstance(value, list):
+        return [_prune_transient_paths(item, work_directory) for item in value]
+    return value
 
 
 def _finish_report(
     payload: dict[str, Any],
     paths: DemoArtifactPaths,
     started_at: float,
+    *,
+    keep_intermediates: bool,
 ) -> dict[str, Any]:
     payload["timings_seconds"]["total"] = time.perf_counter() - started_at
+    payload["artifacts"] = paths.to_dict(include_intermediates=keep_intermediates)
+    if not keep_intermediates:
+        payload = _prune_transient_paths(payload, paths.work_directory)
+        paths.cleanup_intermediates()
     write_json_report(paths.report, payload)
     return payload
 
@@ -132,6 +199,7 @@ def _failure(
     stage: str,
     error_type: str,
     message: str,
+    keep_intermediates: bool,
 ) -> dict[str, Any]:
     payload.update(
         {
@@ -146,7 +214,12 @@ def _failure(
         write_json_report(paths.mouth_roi_report, payload["error"])
     elif stage == "mouth_roi_display":
         write_json_report(paths.mouth_roi_display_report, payload["error"])
-    return _finish_report(payload, paths, started_at)
+    return _finish_report(
+        payload,
+        paths,
+        started_at,
+        keep_intermediates=keep_intermediates,
+    )
 
 
 def run_end_to_end_demo(
@@ -163,6 +236,8 @@ def run_end_to_end_demo(
     frame_rate: int = TARGET_FRAME_RATE,
     max_detection_size: int = DEFAULT_DETECTION_MAX_SIZE,
     confidence_threshold: float | None = None,
+    visual_fallback_policy: VisualFallbackPolicy = "whole_utterance",
+    keep_intermediates: bool = False,
 ) -> dict[str, Any]:
     """Run raw media through best-effort visual processing and AVSR inference.
 
@@ -190,8 +265,10 @@ def run_end_to_end_demo(
             "frame_rate": frame_rate,
             "max_detection_size": max_detection_size,
             "confidence_threshold": confidence_threshold,
+            "visual_fallback_policy": visual_fallback_policy,
+            "keep_intermediates": keep_intermediates,
         },
-        "artifacts": paths.to_dict(),
+        "artifacts": paths.to_dict(include_intermediates=keep_intermediates),
         "timings_seconds": {},
     }
     stage = "output_initialization"
@@ -207,6 +284,7 @@ def run_end_to_end_demo(
             max_duration_seconds=max_duration_seconds,
             frame_rate=frame_rate,
             max_detection_size=max_detection_size,
+            visual_fallback_policy=visual_fallback_policy,
         )
         quality_policy = load_face_tracking_quality_policy(resolved_config)
         if confidence_threshold is not None:
@@ -242,6 +320,7 @@ def run_end_to_end_demo(
         stage = "face_tracking"
         stage_started = time.perf_counter()
         visual_fallback: dict[str, str] | None = None
+        sequence = None
         try:
             sequence = track_face_landmarks(
                 resolved_media,
@@ -310,17 +389,13 @@ def run_end_to_end_demo(
                 },
                 "processing_seconds": time.perf_counter() - stage_started,
             }
-            payload.setdefault("warnings", []).append(
-                "mouth_roi_display_unavailable"
-            )
+            payload.setdefault("warnings", []).append("mouth_roi_display_unavailable")
         else:
             display_report = display_result.to_dict()
             display_report["status"] = "passed"
             display_report["artifact_role"] = "ui_visualization_only"
             display_report["used_for_inference"] = False
-            display_report["processing_seconds"] = (
-                time.perf_counter() - stage_started
-            )
+            display_report["processing_seconds"] = time.perf_counter() - stage_started
             payload["face_tracking"]["visual_availability"] = (
                 display_result.visual_availability
             )
@@ -334,14 +409,23 @@ def run_end_to_end_demo(
             "processing_seconds"
         ]
 
-        inference_mode = "audio_visual"
-        if visual_fallback is not None:
+        has_usable_visual = sequence is not None and bool(sequence.mouth_visible.any())
+        use_interval_gate = (
+            visual_fallback_policy == "interval_gated"
+            and has_usable_visual
+            and not bool(sequence.mouth_visible.all())
+        )
+        inference_mode = (
+            "audio_visual_interval_gated" if use_interval_gate else "audio_visual"
+        )
+        visual_mask = sequence.mouth_visible if use_interval_gate else None
+        if visual_fallback is not None and not use_interval_gate:
             inference_mode = "audio_only_fallback"
             payload.setdefault("warnings", []).append(
                 "visual_preprocessing_unavailable_audio_only_fallback"
             )
             payload["modality_decision"] = {
-                "policy": "automatic",
+                "policy": visual_fallback_policy,
                 "selected_mode": inference_mode,
                 "visual_input_used": False,
                 "visual_gap_policy": "visual_input_not_used",
@@ -359,18 +443,32 @@ def run_end_to_end_demo(
             )
         else:
             payload["modality_decision"] = {
-                "policy": "automatic",
+                "policy": visual_fallback_policy,
                 "selected_mode": inference_mode,
                 "visual_input_used": True,
-                "visual_gap_policy": "interpolated_landmarks",
+                "visual_gap_policy": (
+                    "zero_before_visual_frontend_and_feature_gated"
+                    if use_interval_gate
+                    else "interpolated_landmarks"
+                ),
                 "display_gap_policy": "no_visual_signal_placeholder",
+                "availability_source": "stabilized_mouth_landmarks",
+                "visual_coverage": float(sequence.mouth_visible.mean()),
+                "experimental": use_interval_gate,
             }
             stage = "mouth_roi"
+            if use_interval_gate:
+                payload.setdefault("warnings", []).append(
+                    "experimental_interval_gating_enabled"
+                )
+                if visual_fallback is not None:
+                    payload["modality_decision"]["quality_warning"] = visual_fallback
             stage_started = time.perf_counter()
             mouth_result = export_aligned_mouth_roi_video(
                 resolved_media,
                 paths.face_track,
                 paths.mouth_roi,
+                require_quality_passed=not use_interval_gate,
             )
             mouth_report = mouth_result.to_dict()
             mouth_report["processing_seconds"] = time.perf_counter() - stage_started
@@ -383,6 +481,7 @@ def run_end_to_end_demo(
             prepared = prepare_mouth_roi_media(
                 paths.mouth_roi,
                 max_duration_seconds=max_duration_seconds,
+                visual_availability=visual_mask,
             )
             payload["timings_seconds"]["av_preprocessing"] = (
                 time.perf_counter() - stage_started
@@ -422,7 +521,12 @@ def run_end_to_end_demo(
             ).to_dict()
 
         payload.update({"status": "passed", "stage": "complete"})
-        return _finish_report(payload, paths, started_at)
+        return _finish_report(
+            payload,
+            paths,
+            started_at,
+            keep_intermediates=keep_intermediates,
+        )
     except ModelAssetsError as exc:
         return _failure(
             payload=payload,
@@ -431,6 +535,7 @@ def run_end_to_end_demo(
             stage=exc.stage,
             error_type=type(exc).__name__,
             message=str(exc),
+            keep_intermediates=keep_intermediates,
         )
     except (MediaInputError, OSError, TypeError, ValueError) as exc:
         return _failure(
@@ -440,4 +545,5 @@ def run_end_to_end_demo(
             stage=stage,
             error_type=type(exc).__name__,
             message=str(exc),
+            keep_intermediates=keep_intermediates,
         )
