@@ -292,7 +292,7 @@ def test_end_to_end_demo_writes_consolidated_success_report(
     assert not paths.face_track.exists()
     assert not paths.mouth_roi.exists()
     assert not paths.work_directory.exists()
-    assert set(payload["artifacts"]) == {"run_directory", "mouth_roi", "report"}
+    assert set(payload["artifacts"]) == {"mouth_roi", "report"}
     assert paths.mouth_roi_display.is_file()
     assert calls == [
         "track",
@@ -445,6 +445,7 @@ def test_display_export_failure_does_not_suppress_transcription(
     assert not paths.mouth_roi_display.exists()
     assert not paths.mouth_roi_display_report.exists()
     assert not paths.mouth_roi.exists()
+    assert set(payload["artifacts"]) == {"report"}
 
 
 def test_quality_failure_falls_back_to_audio_only(

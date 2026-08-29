@@ -67,21 +67,36 @@ class DemoArtifactPaths:
             report=run_directory / "report.json",
         )
 
-    def to_dict(self, *, include_intermediates: bool = False) -> dict[str, str]:
-        artifacts = {
-            "run_directory": str(self.run_directory),
-            "mouth_roi": str(self.mouth_roi_display),
-            "report": str(self.report),
-        }
+    def to_dict(
+        self,
+        *,
+        include_intermediates: bool = False,
+        existing_only: bool = False,
+    ) -> dict[str, str]:
+        """Return the public artifact contract for this run.
+
+        The consolidated report is always planned. Other files are advertised
+        only after they exist when ``existing_only`` is enabled, preventing a
+        failed optional export from leaving a broken artifact link.
+        """
+
+        artifacts = {"report": str(self.report)}
+        if not existing_only or self.mouth_roi_display.is_file():
+            artifacts["mouth_roi"] = str(self.mouth_roi_display)
         if include_intermediates:
+            intermediates = {
+                "work_directory": self.work_directory,
+                "face_track": self.face_track,
+                "face_tracking_report": self.face_tracking_report,
+                "inference_mouth_roi": self.mouth_roi,
+                "mouth_roi_report": self.mouth_roi_report,
+                "mouth_roi_display_report": self.mouth_roi_display_report,
+            }
             artifacts.update(
                 {
-                    "work_directory": str(self.work_directory),
-                    "face_track": str(self.face_track),
-                    "face_tracking_report": str(self.face_tracking_report),
-                    "inference_mouth_roi": str(self.mouth_roi),
-                    "mouth_roi_report": str(self.mouth_roi_report),
-                    "mouth_roi_display_report": str(self.mouth_roi_display_report),
+                    name: str(path)
+                    for name, path in intermediates.items()
+                    if not existing_only or path.exists()
                 }
             )
         return artifacts
@@ -183,10 +198,13 @@ def _finish_report(
     keep_intermediates: bool,
 ) -> dict[str, Any]:
     payload["timings_seconds"]["total"] = time.perf_counter() - started_at
-    payload["artifacts"] = paths.to_dict(include_intermediates=keep_intermediates)
     if not keep_intermediates:
         payload = _prune_transient_paths(payload, paths.work_directory)
         paths.cleanup_intermediates()
+    payload["artifacts"] = paths.to_dict(
+        include_intermediates=keep_intermediates,
+        existing_only=True,
+    )
     write_json_report(paths.report, payload)
     return payload
 

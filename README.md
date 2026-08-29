@@ -210,8 +210,8 @@ Add `--reference-text "the exact sentence spoken in the video"` to calculate
 WER/CER. The model device and dtype come from `configs/config.yaml`; the
 tracking device is selected independently with `--tracking-device`.
 
-By default, each run retains only the final UI mouth-ROI video and consolidated
-JSON report:
+By default, each run retains only the final UI mouth-ROI video (when available)
+and consolidated JSON report:
 
 ~~~text
 outputs/demo/webcam_001/
@@ -386,27 +386,31 @@ Inference currently processes one utterance per call.
 
 ## Webcam evaluation results
 
-Four local webcam recordings were processed from raw full-frame video through tracking, mouth extraction, inference, and WER/CER evaluation.
+Ten local webcam recordings were processed from raw full-frame video through
+tracking, mouth extraction, joint CTC/attention inference, and WER/CER
+evaluation. The interval-gated policy was enabled and activated only when the
+visual stream contained missing intervals.
 
-### Joint-decoder transcripts
+### Latest joint-decoder run
 
-| Sample | Duration | Reference | Prediction | WER | CER |
-| --- | ---: | --- | --- | ---: | ---: |
-| `webcam_001` | 4.40 s | hôm nay thời tiết bên ngoài rất đẹp | hôm nay thời tiết bên ngoài rất đẹp | 0.00% | 0.00% |
-| `webcam_002` | 4.04 s | ở đây mở nhạc to quá không nghe rõ | ở đây mở nhạc to quá không nghe rõ | 0.00% | 0.00% |
-| `webcam_003` | 5.04 s | mình đi ăn tối thôi | mình đi anh tối thôi | 20.00% | 10.53% |
-| `webcam_004` | 7.20 s | một ông sao sáng hai ông sáng sao ba ông sao sáng | một ông sáu sáng hai ông sáng sáu ba ông sáu sáng | 25.00% | 12.24% |
+| Sample | Duration | Inference mode | Visual coverage | WER | CER |
+| --- | ---: | --- | ---: | ---: | ---: |
+| `webcam_001` | 4.45 s | Audio + visual | 100.00% | 0.00% | 0.00% |
+| `webcam_002` | 4.10 s | Audio + visual | 100.00% | 0.00% | 0.00% |
+| `webcam_003` | 5.10 s | Audio + visual | 100.00% | 20.00% | 10.53% |
+| `webcam_004` | 7.28 s | Audio + visual | 100.00% | 25.00% | 12.24% |
+| `webcam_005` | 9.47 s | Interval-gated AV | 97.03% | 32.35% | 20.00% |
+| `webcam_006` | 7.59 s | Interval-gated AV | 40.96% | 0.00% | 0.00% |
+| `webcam_007` | 8.64 s | Interval-gated AV | 21.50% | 4.76% | 2.38% |
+| `webcam_008` | 8.58 s | Interval-gated AV | 67.45% | 22.22% | 11.59% |
+| `webcam_009` | 9.19 s | Interval-gated AV | 72.81% | 0.00% | 0.00% |
+| `webcam_010` | 8.85 s | Interval-gated AV | 96.35% | 6.67% | 4.92% |
 
-### Decoder comparison
+Across all ten recordings, the corpus result was 21 word errors over 165
+reference words (12.73% WER) and 49 character errors over 670 reference
+characters (7.31% CER). Full transcripts and diagnostics are stored in each
+sample's consolidated `report.json`.
 
-| Decoder | Word errors / words | Corpus WER | Character errors / characters | Corpus CER |
-| --- | ---: | ---: | ---: | ---: |
-| CTC greedy | 6 / 34 | 17.65% | 13 / 137 | 9.49% |
-| Joint CTC/attention | 4 / 34 | 11.76% | 8 / 137 | 5.84% |
-
-The joint decoder made `webcam_001` and `webcam_002` exact, matched the greedy result for `webcam_003`, and increased the repeated `sao`/`sáu` confusion in `webcam_004`.
-
-These four files are a local integration set, not a statistically representative model benchmark.
 
 A separate ten-sample compatibility run on the official ViCocktail clean test split produced:
 
@@ -430,7 +434,19 @@ python scripts/run_official_benchmark.py \
   --ctc-weight 0.1
 ```
 
-Artifacts are written under `outputs/official_benchmark/` and ignored by Git.
+By default the benchmark retains only:
+
+```text
+outputs/official_benchmark/
+  benchmark_report.json
+  execution.log
+```
+
+Downloaded media and duplicate per-sample reports are transient and are removed
+after their contents have been consolidated into the benchmark report. Add
+`--keep-intermediates` only when debugging; those files are then retained under
+`outputs/official_benchmark/.work/`. All generated benchmark artifacts are
+ignored by Git.
 
 ## Project structure
 
@@ -460,7 +476,7 @@ python -m pytest
 Current validated result:
 
 ```text
-110 passed
+129 passed
 ```
 
 When Ruff is installed:
