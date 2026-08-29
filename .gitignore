@@ -28,6 +28,17 @@ venv/
 env/
 .conda/
 
+# UI/frontend dependencies and generated state
+node_modules/
+.next/
+.nuxt/
+.svelte-kit/
+.vite/
+*.tsbuildinfo
+playwright-report/
+test-results/
+.streamlit/secrets.toml
+
 # Editors and operating systems
 .vscode/
 .idea/
