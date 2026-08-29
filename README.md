@@ -21,6 +21,30 @@ webcam video with embedded audio
 
 The implementation targets Linux. Windows users should run it inside WSL2 Ubuntu so FFmpeg, Conda, CUDA, and POSIX paths behave consistently.
 
+## Current validated status
+
+The backend is ready for glass-box UI integration. The remaining product work is
+primarily presentation, recording controls, asynchronous execution, and
+report visualization, not a second implementation of AVSR preprocessing or
+inference.
+
+| Capability | Current status |
+| --- | --- |
+| Vietnamese checkpoint and tokenizer | Pinned, checksum-validated, vocabulary-compatible |
+| Raw webcam preprocessing | Face tracking, quality gates, alignment, 96x96 mouth ROI, synchronized audio |
+| Missing visual intervals | Display-ready `No visual signal` frames plus experimental interval-gated inference |
+| Unusable visual stream | Whole-utterance audio-only fallback still produces a transcript |
+| Decoding and evaluation | CTC greedy, joint CTC/attention, Vietnamese WER/CER |
+| End-to-end integration | One library call and one CLI command, with schema-versioned JSON |
+| Generated artifacts | Final report plus optional mouth-ROI display video; transient work is removed |
+| Automated validation | 138 tests passing |
+| Local webcam evidence | 10/10 recordings completed; corpus WER 12.73%, CER 7.31% |
+| ViCocktail robustness smoke | 5/5 samples and 145/145 condition records passed |
+
+These results establish integration readiness, not production-level accuracy.
+The five-sample robustness run is a smoke test; use the resumable full-split
+command below for final experimental conclusions.
+
 ## Features
 
 - Vietnamese AV-HuBERT checkpoint loading from Hugging Face.
@@ -191,7 +215,139 @@ samples/webcam/webcam_001_reference.txt
 
 ## End-to-end webcam inference
 
-### 1. Inspect the raw recording
+### One-command raw-video workflow
+
+For the normal demo path, give the runner a raw webcam video that contains both
+video and audio:
+
+~~~bash
+python scripts/run_avsr_demo.py \
+  --config configs/config.yaml \
+  --media samples/webcam/webcam_001.mp4 \
+  --tracking-device auto \
+  --decoder joint_beam_search \
+  --beam-size 3 \
+  --ctc-weight 0.1
+~~~
+
+Add `--reference-text "the exact sentence spoken in the video"` to calculate
+WER/CER. The model device and dtype come from `configs/config.yaml`; the
+tracking device is selected independently with `--tracking-device`.
+
+By default, each run retains only the final UI mouth-ROI video (when available)
+and consolidated JSON report:
+
+~~~text
+outputs/demo/webcam_001/
+  mouth_roi.mp4
+  report.json
+~~~
+
+The report contains raw-media metadata, face-quality diagnostics, preprocessed
+tensor shapes, model/tokenizer metadata, modality decisions, decoder parameters,
+transcript, timings, and optional WER/CER. If visual preprocessing is unusable,
+the default `whole_utterance` policy transcribes from audio only.
+
+An experimental interval-level policy is available for recordings where visual
+data is missing only during parts of the utterance:
+
+~~~bash
+python scripts/run_avsr_demo.py \
+  --config configs/config.yaml \
+  --media samples/webcam/webcam_001.mp4 \
+  --visual-fallback-policy interval_gated
+~~~
+
+This mode zeros unavailable mouth frames before the visual frontend and zeros
+their visual features again before audio/visual fusion. It preserves usable
+visual intervals, but the released checkpoint was not specifically trained for
+this masking policy, so compare its WER/CER against the default fallback.
+
+Add `--keep-intermediates` when debugging. Transient face tracks, stage reports,
+and the inference-only ROI are then retained under `outputs/demo/<stem>/.work/`.
+Without that flag they are deleted after the consolidated report is written.
+
+## Glass-box UI handoff
+
+The UI should integrate with the reusable Python function, not reproduce shell
+commands or preprocessing logic:
+
+```python
+from pathlib import Path
+
+from viavsr.demo import run_end_to_end_demo
+
+payload = run_end_to_end_demo(
+    config_path=Path("configs/config.yaml"),
+    media_path=Path("recordings/current.mp4"),
+    output_root=Path("outputs/demo"),
+    tracking_device="auto",
+    decoder="joint_beam_search",
+    beam_size=3,
+    ctc_weight=0.1,
+    visual_fallback_policy="whole_utterance",
+)
+```
+
+This call is blocking, so run it in a worker process or background thread and
+disable duplicate Record/Infer actions until it finishes. It returns the same
+dictionary written to `outputs/demo/<media-stem>/report.json`. The current
+report schema is version 3; reject unknown future major versions rather than
+silently interpreting changed fields.
+
+### UI data contract
+
+| UI area | Source |
+| --- | --- |
+| Original recording | `request.media_path` and `raw_media` |
+| Processed mouth video | `artifacts.mouth_roi`, when present |
+| Visual availability | `face_tracking.visual_availability` |
+| Missing intervals | `face_tracking.visual_availability.missing_intervals` |
+| Tracking quality | `face_tracking.quality_status`, `detection_rate`, and `visual_coverage` |
+| Selected modality | `modality_decision.selected_mode` and `visual_input_used` |
+| Transcript | `result.transcript` |
+| Decoder settings | `result.decoder`, `beam_size`, and `ctc_weight` |
+| Runtime | `timings_seconds`, especially `total` and `inference` |
+| Optional accuracy | `evaluation.wer` and `evaluation.cer` |
+| Warning state | `warnings` and `modality_decision.fallback_reason` |
+| Failure state | `status`, `stage`, and `error.message` |
+
+The exported mouth video is specifically for UI playback. Its missing intervals
+already contain `No visual signal` frames synchronized to the original
+timeline. If `artifacts.mouth_roi` is absent, show a persistent no-visual
+placeholder while still displaying an audio-only transcript when the run
+succeeds.
+
+Do not read `.work/`, face-track NPZ files, or console text from the UI. Those
+are transient debugging details. Do not invent word confidence, token
+timestamps, or top-N hypotheses: the current backend exposes only the best
+transcript and a sequence-level hypothesis score. Such features require a
+separate backend contract before they can be shown truthfully.
+
+### Recommended first UI milestone
+
+1. Record or select one MP4/WebM file containing camera video and microphone
+   audio, limited to 15 seconds.
+2. Show the original recording and its duration/audio/video metadata.
+3. Run `run_end_to_end_demo` asynchronously and present a clear busy state.
+4. Show the processed mouth video, visual coverage, missing intervals, and
+   selected modality.
+5. Show the best transcript, decoder settings, total runtime, and optional
+   WER/CER when reference text was entered.
+6. Handle `passed`, audio-only fallback, warning, and failed states without
+   crashing or leaving stale output from a previous run.
+7. Allow exporting the final `report.json`.
+
+Use `whole_utterance` as the default fallback policy. The UI may expose
+`interval_gated` behind an **Experimental** control; the released checkpoint
+was not trained specifically for interval masking. Keep the record/infer flow
+single-utterance and single-speaker for this milestone. Multi-speaker selection,
+live streaming, top-N hypotheses, word-level confidence, and model fine-tuning
+remain separate backend work.
+
+### Manual stage-by-stage workflow
+
+#### 1. Inspect the raw recording
 
 ```bash
 python scripts/check_media_input.py \
@@ -207,7 +363,7 @@ Typical `next_stage` values:
 
 A raw full-frame video normally reports `has_mouth_roi_resolution: false`. This describes the current file and is not a tracking failure.
 
-### 2. Track faces and landmarks
+#### 2. Track faces and landmarks
 
 One recording:
 
@@ -236,9 +392,19 @@ outputs/preprocessing/face_tracks/<stem>_face_track.npz
 outputs/preprocessing/face_tracks/<stem>_face_track.json
 ```
 
-The NPZ contains landmarks, face boxes, confidence scores, and detection masks. Load it with `numpy.load(path, allow_pickle=False)`. Use `--device cuda` to require CUDA or `--device cpu` to force CPU tracking.
+The NPZ contains landmarks, face boxes, confidence scores, detection masks, and
+a versioned VIAVSR-7 quality result. Load it with
+`numpy.load(path, allow_pickle=False)`. Quality thresholds live under
+`face_tracking` in `configs/config.yaml`; `--config` selects another policy
+and `--confidence-threshold` overrides only its detection-confidence threshold.
+Low-confidence, low-landmark-confidence, too-small, mostly out-of-frame, and
+geometrically inconsistent face candidates are excluded. This is temporal
+association, not biometric face recognition. The command exits non-zero when the resulting track
+fails clip-level detection-rate, internal/edge missing-run, minimum-frame, or
+ambiguity thresholds. Inspect `quality_issues` and `quality_thresholds` in the JSON
+before retrying.
 
-### 3. Align faces and extract mouth regions
+#### 3. Align faces and extract mouth regions
 
 ```bash
 python scripts/prepare_webcam_mouth_roi.py \
@@ -258,7 +424,7 @@ outputs/preprocessing/mouth_roi/<stem>_mouth96.json
 
 Each MP4 contains a 96×96 aligned grayscale mouth track at 25 fps and synchronized 16 kHz mono audio.
 
-### 4. Run model inference
+#### 4. Run model inference
 
 Joint CTC/attention decoding:
 
@@ -295,7 +461,7 @@ Released joint-decoder settings:
 
 The inference report includes media metadata, tensor shapes, token IDs, transcript, decoder parameters, device, dtype, timing, and optional evaluation.
 
-### 5. Evaluate an existing transcript
+#### 5. Evaluate an existing transcript
 
 ```bash
 python scripts/evaluate_transcripts.py \
@@ -322,27 +488,31 @@ Inference currently processes one utterance per call.
 
 ## Webcam evaluation results
 
-Four local webcam recordings were processed from raw full-frame video through tracking, mouth extraction, inference, and WER/CER evaluation.
+Ten local webcam recordings were processed from raw full-frame video through
+tracking, mouth extraction, joint CTC/attention inference, and WER/CER
+evaluation. The interval-gated policy was enabled and activated only when the
+visual stream contained missing intervals.
 
-### Joint-decoder transcripts
+### Latest joint-decoder run
 
-| Sample | Duration | Reference | Prediction | WER | CER |
-| --- | ---: | --- | --- | ---: | ---: |
-| `webcam_001` | 4.40 s | hôm nay thời tiết bên ngoài rất đẹp | hôm nay thời tiết bên ngoài rất đẹp | 0.00% | 0.00% |
-| `webcam_002` | 4.04 s | ở đây mở nhạc to quá không nghe rõ | ở đây mở nhạc to quá không nghe rõ | 0.00% | 0.00% |
-| `webcam_003` | 5.04 s | mình đi ăn tối thôi | mình đi anh tối thôi | 20.00% | 10.53% |
-| `webcam_004` | 7.20 s | một ông sao sáng hai ông sáng sao ba ông sao sáng | một ông sáu sáng hai ông sáng sáu ba ông sáu sáng | 25.00% | 12.24% |
+| Sample | Duration | Inference mode | Visual coverage | WER | CER |
+| --- | ---: | --- | ---: | ---: | ---: |
+| `webcam_001` | 4.45 s | Audio + visual | 100.00% | 0.00% | 0.00% |
+| `webcam_002` | 4.10 s | Audio + visual | 100.00% | 0.00% | 0.00% |
+| `webcam_003` | 5.10 s | Audio + visual | 100.00% | 20.00% | 10.53% |
+| `webcam_004` | 7.28 s | Audio + visual | 100.00% | 25.00% | 12.24% |
+| `webcam_005` | 9.47 s | Interval-gated AV | 97.03% | 32.35% | 20.00% |
+| `webcam_006` | 7.59 s | Interval-gated AV | 40.96% | 0.00% | 0.00% |
+| `webcam_007` | 8.64 s | Interval-gated AV | 21.50% | 4.76% | 2.38% |
+| `webcam_008` | 8.58 s | Interval-gated AV | 67.45% | 22.22% | 11.59% |
+| `webcam_009` | 9.19 s | Interval-gated AV | 72.81% | 0.00% | 0.00% |
+| `webcam_010` | 8.85 s | Interval-gated AV | 96.35% | 6.67% | 4.92% |
 
-### Decoder comparison
+Across all ten recordings, the corpus result was 21 word errors over 165
+reference words (12.73% WER) and 49 character errors over 670 reference
+characters (7.31% CER). Full transcripts and diagnostics are stored in each
+sample's consolidated `report.json`.
 
-| Decoder | Word errors / words | Corpus WER | Character errors / characters | Corpus CER |
-| --- | ---: | ---: | ---: | ---: |
-| CTC greedy | 6 / 34 | 17.65% | 13 / 137 | 9.49% |
-| Joint CTC/attention | 4 / 34 | 11.76% | 8 / 137 | 5.84% |
-
-The joint decoder made `webcam_001` and `webcam_002` exact, matched the greedy result for `webcam_003`, and increased the repeated `sao`/`sáu` confusion in `webcam_004`.
-
-These four files are a local integration set, not a statistically representative model benchmark.
 
 A separate ten-sample compatibility run on the official ViCocktail clean test split produced:
 
@@ -366,7 +536,90 @@ python scripts/run_official_benchmark.py \
   --ctc-weight 0.1
 ```
 
-Artifacts are written under `outputs/official_benchmark/` and ignored by Git.
+By default the benchmark retains only:
+
+```text
+outputs/official_benchmark/
+  benchmark_report.json
+  execution.log
+```
+
+Downloaded media and duplicate per-sample reports are transient and are removed
+after their contents have been consolidated into the benchmark report. Add
+`--keep-intermediates` only when debugging; those files are then retained under
+`outputs/official_benchmark/.work/`. All generated benchmark artifacts are
+ignored by Git.
+
+## Robustness evaluation
+
+### Visual-dropout robustness benchmark
+
+The robustness runner compares the same ViCocktail samples under:
+
+- clean audio and video;
+- complete audio with deterministic contiguous visual dropout at 10%, 30%, and
+  50%;
+- the same corrupted input without interval gating;
+- interval-gated audio-visual inference;
+- whole-utterance audio-only inference; and
+- automatic routing between interval-gated and audio-only inference.
+
+Three seeds are used by default. Each seed produces the same mask for all paired
+conditions, making their WER/CER differences directly comparable. Run a
+five-sample local smoke check with:
+
+```bash
+python scripts/run_visual_dropout_benchmark.py \
+  --config configs/config.yaml \
+  --split test \
+  --offset 0 \
+  --count 5 \
+  --beam-size 3 \
+  --ctc-weight 0.1 \
+  --output-dir outputs/visual_dropout_smoke_5
+```
+
+Set `--count 0` for the complete remaining split. The defaults are equivalent
+to `--dropout-levels 0.1 0.3 0.5 --seeds 17 29 43`. Work is recorded after
+every condition, so rerunning the exact command safely skips completed records.
+If the dataset revision, model, tokenizer, decoder, dropout protocol, or routing
+threshold changes, use a new output directory.
+
+The verified five-sample smoke run completed all 145 condition records without
+failure. Corpus results were:
+
+| Condition | Visual dropout | WER | CER |
+| --- | ---: | ---: | ---: |
+| Clean AV | 0% | 5.58% | 2.72% |
+| Audio-only | Full visual removal | 4.06% | 1.85% |
+| Corrupted AV | 10% | 5.75% | 2.63% |
+| Interval-gated AV | 10% | 5.41% | 2.43% |
+| Automatic routing | 10% | 5.41% | 2.43% |
+| Corrupted AV | 30% | 6.09% | 2.96% |
+| Interval-gated AV | 30% | 5.75% | 2.76% |
+| Automatic routing | 30% | 5.75% | 2.76% |
+| Corrupted AV | 50% | 6.43% | 2.92% |
+| Interval-gated AV | 50% | 5.58% | 2.59% |
+| Automatic routing | 50% | 4.06% | 1.85% |
+
+Automatic routing selected interval-gated AV for 10% and 30% dropout and
+audio-only at 50% dropout. This small sample is evidence that the benchmark and
+routing mechanics work; it is not sufficient to claim general accuracy gains.
+
+Only three final artifacts are retained:
+
+```text
+outputs/visual_dropout_benchmark/
+  benchmark_report.json
+  execution.log
+  results.jsonl
+```
+
+The JSON report contains corpus and macro WER/CER by condition and dropout
+level, paired deltas from clean AV, routing counts, decoder settings, and
+model/tokenizer metadata. The JSONL file is the append-only resume ledger.
+Downloaded media remains transient under `.work/` and is removed after each
+invocation.
 
 ## Project structure
 
@@ -396,7 +649,7 @@ python -m pytest
 Current validated result:
 
 ```text
-86 passed
+138 passed
 ```
 
 When Ruff is installed:
@@ -420,9 +673,13 @@ Keep these files local:
 - Generated reports, predictions, and logs.
 - Conda or virtual environments.
 - Experiment-tracking directories.
+- UI dependency folders, generated bundles, and browser-test reports.
+- Local UI recordings and framework secret files.
 - Credentials and `.env` files.
 
-Small source files, tests, YAML configuration, tokenizer manifests, and lightweight sample metadata may be committed.
+Commit UI source code, reusable components, tests, lock files, and example
+configuration alongside the existing Python source, YAML configuration,
+tokenizer manifests, and lightweight sample metadata.
 
 Before committing:
 
@@ -473,6 +730,9 @@ A line-continuation backslash must be the final character on its line. Do not pu
 ### Face detection is unstable
 
 Improve frontal pose, lighting, face size, and mouth visibility. Inspect the tracking JSON for detection rate, interpolated frames, confidence, and maximum missing runs.
+Mouth-ROI extraction intentionally rejects a failed track, unsupported artifact
+versions, and legacy NPZ files without VIAVSR-7 quality metadata. Rerun `track_webcam_faces.py` after improving
+the recording; do not bypass the gate by editing the artifact.
 
 ## Current limitations
 

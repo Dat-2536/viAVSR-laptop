@@ -60,14 +60,18 @@ class PreparedAVInput:
     video_lengths: torch.Tensor
     audio_lengths: torch.Tensor
     metadata: MediaMetadata
+    visual_availability: torch.Tensor | None = None
 
     def shape_report(self) -> dict[str, list[int]]:
-        return {
+        report = {
             "videos": list(self.videos.shape),
             "audios": list(self.audios.shape),
             "video_lengths": list(self.video_lengths.shape),
             "audio_lengths": list(self.audio_lengths.shape),
         }
+        if self.visual_availability is not None:
+            report["visual_availability"] = list(self.visual_availability.shape)
+        return report
 
 
 def _require_executable(name: str) -> str:
@@ -299,7 +303,10 @@ def preprocess_audio_waveform(waveform: np.ndarray, video_frames: int) -> torch.
 
 
 def prepare_mouth_roi_media(
-    path: Path | str, *, max_duration_seconds: float = 15.0
+    path: Path | str,
+    *,
+    max_duration_seconds: float = 15.0,
+    visual_availability: np.ndarray | torch.Tensor | None = None,
 ) -> PreparedAVInput:
     """Convert one prepared mouth-ROI media file into batch-one model tensors."""
     media_path = Path(path).expanduser().resolve()
@@ -311,10 +318,63 @@ def prepare_mouth_roi_media(
     audios = preprocess_audio_waveform(waveform, len(frames))
     video_lengths = torch.tensor([len(frames)], dtype=torch.long)
     audio_lengths = torch.tensor([audios.shape[-1]], dtype=torch.long)
+    availability_tensor: torch.Tensor | None = None
+    if visual_availability is not None:
+        availability_tensor = torch.as_tensor(
+            visual_availability,
+            dtype=torch.bool,
+        )
+        if availability_tensor.ndim == 1:
+            availability_tensor = availability_tensor.unsqueeze(0)
+        if availability_tensor.shape != (1, len(frames)):
+            raise MediaInputError(
+                "Visual-availability mask must have shape [T] or [1, T] matching "
+                f"the prepared video; got {list(availability_tensor.shape)} for "
+                f"{len(frames)} frames."
+            )
+
     return PreparedAVInput(
         videos=videos,
         audios=audios,
         video_lengths=video_lengths,
         audio_lengths=audio_lengths,
+        visual_availability=availability_tensor,
+        metadata=metadata,
+    )
+
+
+def prepare_audio_only_media(
+    path: Path | str, *, max_duration_seconds: float = 15.0
+) -> PreparedAVInput:
+    """Prepare aligned audio features while intentionally ignoring video pixels.
+
+    A zero-valued video tensor is retained only to reuse the batch-one prepared
+    input contract and length validation. Experimental audio-only recognition
+    passes video=None to AV-HuBERT, so this placeholder never enters the model.
+    """
+    media_path = Path(path).expanduser().resolve()
+    metadata = probe_av_media(media_path)
+    if metadata.duration_seconds > max_duration_seconds:
+        raise MediaInputError(
+            f"Media is {metadata.duration_seconds:.2f}s; inference accepts at most "
+            f"{max_duration_seconds:.2f}s per segment."
+        )
+
+    waveform = _decode_audio_waveform(media_path)
+    frame_count = max(
+        1,
+        round(len(waveform) / AUDIO_SAMPLES_PER_VIDEO_FRAME),
+    )
+    audios = preprocess_audio_waveform(waveform, frame_count)
+    videos = torch.zeros(
+        (1, 1, frame_count, MODEL_VIDEO_SIZE, MODEL_VIDEO_SIZE),
+        dtype=audios.dtype,
+    )
+    lengths = torch.tensor([frame_count], dtype=torch.long)
+    return PreparedAVInput(
+        videos=videos,
+        audios=audios,
+        video_lengths=lengths,
+        audio_lengths=lengths.clone(),
         metadata=metadata,
     )

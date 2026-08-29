@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import torch
 
+from viavsr.preprocessing import media
 from viavsr.preprocessing.errors import MediaInputError
 from viavsr.preprocessing.media import (
     AUDIO_FEATURE_DIM,
@@ -14,6 +15,7 @@ from viavsr.preprocessing.media import (
     MediaMetadata,
     _parse_probe_payload,
     match_audio_to_video,
+    prepare_audio_only_media,
     preprocess_audio_waveform,
     preprocess_video_frames,
     validate_demo_media,
@@ -137,3 +139,24 @@ def test_preprocess_video_frames_rejects_unprepared_full_frames() -> None:
 
     with pytest.raises(MediaInputError, match=r"\[T, 96, 96\]"):
         preprocess_video_frames(frames)
+
+
+def test_prepare_audio_only_media_accepts_raw_webcam_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = _metadata(
+        duration_seconds=2.0,
+        video_width=1280,
+        video_height=720,
+    )
+    waveform = np.zeros(2 * 16_000, dtype=np.float32)
+    monkeypatch.setattr(media, "probe_av_media", lambda path: metadata)
+    monkeypatch.setattr(media, "_decode_audio_waveform", lambda path: waveform)
+
+    prepared = prepare_audio_only_media("raw-webcam.mp4")
+
+    assert prepared.audios.shape == (1, AUDIO_FEATURE_DIM, 50)
+    assert prepared.videos.shape == (1, 1, 50, MODEL_VIDEO_SIZE, MODEL_VIDEO_SIZE)
+    assert prepared.video_lengths.tolist() == [50]
+    assert prepared.audio_lengths.tolist() == [50]
+    assert torch.count_nonzero(prepared.videos).item() == 0

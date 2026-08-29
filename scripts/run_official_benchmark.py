@@ -7,7 +7,9 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,64 @@ HUGGING_FACE_API = "https://huggingface.co/api/datasets"
 DATA_REVISION_RE = re.compile(r"@([0-9a-f]{40})/")
 
 
+@dataclass(frozen=True)
+class BenchmarkArtifactPaths:
+    """Final and transient paths for one official benchmark run."""
+
+    output_directory: Path
+    work_directory: Path
+    media_directory: Path
+    predictions_directory: Path
+    report: Path
+    execution_log: Path
+
+    @classmethod
+    def for_output(cls, output_directory: Path) -> BenchmarkArtifactPaths:
+        output_directory = output_directory.expanduser().resolve()
+        work_directory = output_directory / ".work"
+        return cls(
+            output_directory=output_directory,
+            work_directory=work_directory,
+            media_directory=work_directory / "media",
+            predictions_directory=work_directory / "predictions",
+            report=output_directory / "benchmark_report.json",
+            execution_log=output_directory / "execution.log",
+        )
+
+    def reset_work_directory(self) -> None:
+        """Reset only the reserved transient directory below this output."""
+
+        self.output_directory.mkdir(parents=True, exist_ok=True)
+        resolved_work = self.work_directory.resolve()
+        if resolved_work.parent != self.output_directory.resolve():
+            raise ValueError("Benchmark work directory escaped its output directory.")
+        shutil.rmtree(resolved_work, ignore_errors=True)
+        resolved_work.mkdir(parents=True, exist_ok=True)
+
+    def cleanup_intermediates(self) -> None:
+        """Delete downloaded media and duplicate per-sample reports."""
+
+        resolved_work = self.work_directory.resolve()
+        if resolved_work.parent != self.output_directory.resolve():
+            raise ValueError("Benchmark work directory escaped its output directory.")
+        shutil.rmtree(resolved_work, ignore_errors=True)
+
+    def to_dict(self, *, include_intermediates: bool) -> dict[str, str]:
+        artifacts = {
+            "report": str(self.report),
+            "execution_log": str(self.execution_log),
+        }
+        if include_intermediates:
+            artifacts.update(
+                {
+                    "work_directory": str(self.work_directory),
+                    "predictions_directory": str(self.predictions_directory),
+                    "media_directory": str(self.media_directory),
+                }
+            )
+        return artifacts
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -54,6 +114,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-duration", default=30.0, type=float)
     parser.add_argument("--beam-size", default=DEFAULT_BEAM_SIZE, type=int)
     parser.add_argument("--ctc-weight", default=DEFAULT_CTC_WEIGHT, type=float)
+    parser.add_argument(
+        "--keep-intermediates",
+        action="store_true",
+        help="Retain downloaded media and per-sample reports under .work/.",
+    )
     return parser
 
 
@@ -197,12 +262,9 @@ def main() -> int:
     if args.count <= 0 or args.offset < 0:
         raise SystemExit("--count must be positive and --offset must be non-negative.")
 
-    output_dir = args.output_dir.expanduser().resolve()
-    media_dir = output_dir / "media"
-    predictions_dir = output_dir / "predictions"
-    report_path = output_dir / "benchmark_report.json"
-    log_path = output_dir / "execution.log"
-    logger = _logger(log_path)
+    paths = BenchmarkArtifactPaths.for_output(args.output_dir)
+    paths.reset_work_directory()
+    logger = _logger(paths.execution_log)
     started_at = datetime.now(UTC)
     wall_started = time.perf_counter()
 
@@ -230,7 +292,7 @@ def main() -> int:
             split=args.split,
             offset=args.offset,
             count=args.count,
-            media_dir=media_dir,
+            media_dir=paths.media_directory,
         )
         for sample in samples:
             logger.info(
@@ -289,7 +351,10 @@ def main() -> int:
                     "evaluation": evaluation.to_dict(),
                 }
                 passed.append(payload)
-                write_json_report(predictions_dir / f"{row_index:010d}.json", payload)
+                write_json_report(
+                    paths.predictions_directory / f"{row_index:010d}.json",
+                    payload,
+                )
                 logger.info(
                     "PASSED row=%d WER=%.6f CER=%.6f transcript=%s",
                     row_index,
@@ -314,7 +379,10 @@ def main() -> int:
                     },
                 }
                 failures.append(failure)
-                write_json_report(predictions_dir / f"{row_index:010d}.json", failure)
+                write_json_report(
+                    paths.predictions_directory / f"{row_index:010d}.json",
+                    failure,
+                )
                 logger.error(
                     "FAILED row=%d error=%s",
                     row_index,
@@ -360,14 +428,9 @@ def main() -> int:
             "aggregate": aggregate,
             "samples": passed,
             "failures": failures,
-            "artifacts": {
-                "report": str(report_path),
-                "execution_log": str(log_path),
-                "predictions_directory": str(predictions_dir),
-                "media_directory": str(media_dir),
-            },
+            "artifacts": paths.to_dict(include_intermediates=args.keep_intermediates),
         }
-        write_json_report(report_path, report)
+        write_json_report(paths.report, report)
         logger.info(
             "Benchmark complete: status=%s passed=%d failed=%d corpus_WER=%s corpus_CER=%s",
             status,
@@ -380,8 +443,8 @@ def main() -> int:
             json.dumps(
                 {
                     "status": status,
-                    "report": str(report_path),
-                    "execution_log": str(log_path),
+                    "report": str(paths.report),
+                    "execution_log": str(paths.execution_log),
                     "aggregate": aggregate,
                 },
                 ensure_ascii=False,
@@ -393,14 +456,17 @@ def main() -> int:
         message = redact_secrets(str(exc))
         logger.error("Benchmark aborted: %s", message)
         write_json_report(
-            report_path,
+            paths.report,
             {
                 "status": "failed",
                 "error": {"type": type(exc).__name__, "message": message},
-                "artifacts": {"execution_log": str(log_path)},
+                "artifacts": paths.to_dict(include_intermediates=False),
             },
         )
         return 1
+    finally:
+        if not args.keep_intermediates:
+            paths.cleanup_intermediates()
 
 
 if __name__ == "__main__":

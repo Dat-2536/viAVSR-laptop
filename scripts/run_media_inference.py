@@ -15,7 +15,11 @@ from viavsr.inference import (
 )
 from viavsr.inference.errors import ModelAssetsError
 from viavsr.inference.reporting import redact_secrets, write_json_report
-from viavsr.preprocessing import MediaInputError, prepare_mouth_roi_media
+from viavsr.preprocessing import (
+    MediaInputError,
+    prepare_audio_only_media,
+    prepare_mouth_roi_media,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = REPOSITORY_ROOT / "outputs/inference/media_inference.json"
@@ -24,8 +28,9 @@ DEFAULT_OUTPUT = REPOSITORY_ROOT / "outputs/inference/media_inference.json"
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run Vietnamese AVSR inference on a prepared 96x96 mouth-ROI video "
-            "with embedded audio."
+            "Run Vietnamese AVSR inference on a prepared 96x96 mouth-ROI video, "
+            "or exercise experimental audio-only inference on raw media with "
+            "embedded audio."
         )
     )
     parser.add_argument("--config", required=True, type=Path)
@@ -38,6 +43,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--beam-size", default=DEFAULT_BEAM_SIZE, type=int)
     parser.add_argument("--ctc-weight", default=DEFAULT_CTC_WEIGHT, type=float)
+    parser.add_argument(
+        "--experimental-audio-only",
+        action="store_true",
+        help=(
+            "Ignore video pixels and exercise the released encoder's video=None "
+            "branch. This is an experiment, not a supported checkpoint mode."
+        ),
+    )
     parser.add_argument("--reference-text", default=None)
     parser.add_argument("--output", default=DEFAULT_OUTPUT, type=Path)
     return parser
@@ -48,9 +61,12 @@ def main() -> int:
     stage = "preprocessing"
     try:
         started = time.perf_counter()
-        prepared = prepare_mouth_roi_media(
-            args.media, max_duration_seconds=args.max_duration
+        prepare = (
+            prepare_audio_only_media
+            if args.experimental_audio_only
+            else prepare_mouth_roi_media
         )
+        prepared = prepare(args.media, max_duration_seconds=args.max_duration)
         preprocessing_seconds = time.perf_counter() - started
 
         stage = "asset_loading"
@@ -64,6 +80,11 @@ def main() -> int:
             decoder=args.decoder,
             beam_size=args.beam_size,
             ctc_weight=args.ctc_weight,
+            inference_mode=(
+                "audio_only_experimental"
+                if args.experimental_audio_only
+                else "audio_visual"
+            ),
         )
         payload = {
             "status": "passed",

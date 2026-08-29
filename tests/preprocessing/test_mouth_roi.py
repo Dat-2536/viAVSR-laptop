@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
 
@@ -8,11 +10,31 @@ from viavsr.preprocessing.mouth_roi import (
     MOUTH_START_INDEX,
     MOUTH_STOP_INDEX,
     align_and_crop_mouth_frame,
+    create_no_signal_frame,
     estimate_alignment_transform,
+    export_aligned_mouth_roi_video,
     load_face_track_artifact,
     load_mean_face,
     smooth_landmarks,
 )
+
+
+def test_aligned_export_exposes_quality_override_as_keyword_only() -> None:
+    parameter = inspect.signature(export_aligned_mouth_roi_video).parameters[
+        "require_quality_passed"
+    ]
+
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is True
+
+
+def test_create_no_signal_frame_is_visible_grayscale_placeholder() -> None:
+    frame = create_no_signal_frame()
+
+    assert frame.shape == (96, 96)
+    assert frame.dtype == np.uint8
+    assert frame.min() < frame.max()
+    assert np.count_nonzero(frame > 100) > 0
 
 
 def test_load_mean_face_returns_official_68_point_geometry() -> None:
@@ -89,6 +111,8 @@ def test_load_face_track_artifact_reads_numeric_arrays(tmp_path) -> None:
         detected=np.asarray([True, False, True]),
         original_resolution=np.asarray([1920, 1080], dtype=np.int32),
         frame_rate=np.asarray([25], dtype=np.int32),
+        artifact_version=np.asarray([1], dtype=np.int32),
+        quality_passed=np.asarray([True], dtype=np.bool_),
     )
 
     artifact = load_face_track_artifact(path)
@@ -97,7 +121,32 @@ def test_load_face_track_artifact_reads_numeric_arrays(tmp_path) -> None:
     assert artifact.original_width == 1920
     assert artifact.original_height == 1080
     assert artifact.frame_rate == 25
+    assert artifact.artifact_version == 1
     assert artifact.detected.tolist() == [True, False, True]
+    assert artifact.mouth_visible_raw.tolist() == [True, False, True]
+    assert artifact.mouth_visible.tolist() == [True, False, True]
+
+
+def test_load_face_track_artifact_reads_version_two_visibility_masks(tmp_path) -> None:
+    path = tmp_path / "track_v2.npz"
+    np.savez_compressed(
+        path,
+        landmarks=np.ones((3, 68, 2), dtype=np.float32),
+        detected=np.asarray([True, False, True]),
+        mouth_visible_raw=np.asarray([True, False, True]),
+        mouth_visible=np.asarray([True, True, True]),
+        original_resolution=np.asarray([1920, 1080], dtype=np.int32),
+        frame_rate=np.asarray([25], dtype=np.int32),
+        artifact_version=np.asarray([2], dtype=np.int32),
+        quality_passed=np.asarray([True], dtype=np.bool_),
+    )
+
+    artifact = load_face_track_artifact(path)
+
+    assert artifact.artifact_version == 2
+    assert artifact.detected.tolist() == [True, False, True]
+    assert artifact.mouth_visible_raw.tolist() == [True, False, True]
+    assert artifact.mouth_visible.tolist() == [True, True, True]
 
 
 @pytest.mark.parametrize(
@@ -128,7 +177,66 @@ def test_load_face_track_artifact_rejects_invalid_shapes(
         detected=detected,
         original_resolution=np.asarray([1920, 1080], dtype=np.int32),
         frame_rate=np.asarray([25], dtype=np.int32),
+        artifact_version=np.asarray([1], dtype=np.int32),
+        quality_passed=np.asarray([True], dtype=np.bool_),
     )
 
     with pytest.raises(MediaInputError, match=message):
+        load_face_track_artifact(path)
+
+
+def test_load_face_track_artifact_rejects_failed_quality_gate(tmp_path) -> None:
+    path = tmp_path / "failed_track.npz"
+    np.savez_compressed(
+        path,
+        landmarks=np.ones((3, 68, 2), dtype=np.float32),
+        detected=np.asarray([True, False, True]),
+        original_resolution=np.asarray([1920, 1080], dtype=np.int32),
+        frame_rate=np.asarray([25], dtype=np.int32),
+        artifact_version=np.asarray([1], dtype=np.int32),
+        quality_passed=np.asarray([False], dtype=np.bool_),
+    )
+
+    with pytest.raises(MediaInputError, match="quality gates failed"):
+        load_face_track_artifact(path)
+
+    diagnostic_artifact = load_face_track_artifact(path, require_quality_passed=False)
+    assert diagnostic_artifact.quality_passed is False
+    assert diagnostic_artifact.detected.tolist() == [True, False, True]
+
+
+def test_load_face_track_artifact_rejects_legacy_artifact_without_quality(
+    tmp_path,
+) -> None:
+    path = tmp_path / "legacy_track.npz"
+    np.savez_compressed(
+        path,
+        landmarks=np.ones((3, 68, 2), dtype=np.float32),
+        detected=np.asarray([True, False, True]),
+        original_resolution=np.asarray([1920, 1080], dtype=np.int32),
+        frame_rate=np.asarray([25], dtype=np.int32),
+    )
+
+    with pytest.raises(
+        MediaInputError,
+        match="VIAVSR-7 face-track artifact with quality metadata",
+    ):
+        load_face_track_artifact(path)
+
+
+def test_load_face_track_artifact_rejects_unsupported_version(tmp_path) -> None:
+    path = tmp_path / "future_track.npz"
+    np.savez_compressed(
+        path,
+        landmarks=np.ones((3, 68, 2), dtype=np.float32),
+        detected=np.asarray([True, True, True]),
+        original_resolution=np.asarray([1920, 1080], dtype=np.int32),
+        frame_rate=np.asarray([25], dtype=np.int32),
+        artifact_version=np.asarray([999], dtype=np.int32),
+        quality_passed=np.asarray([True], dtype=np.bool_),
+    )
+
+    with pytest.raises(
+        MediaInputError, match="Unsupported face-track artifact version"
+    ):
         load_face_track_artifact(path)
