@@ -1,16 +1,25 @@
-FROM python:3.12
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 
-WORKDIR /code
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
-COPY pyproject.toml .
+WORKDIR /app
 
-COPY src ./src
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-dev \
+    python3-pip \
+    ffmpeg \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY backend ./backend
+COPY . .
 
-RUN python -m pip install --no-cache-dir .
+RUN python3.11 -m pip install --upgrade pip
 
-EXPOSE 8000
+RUN python3.11 -m pip install -e ".[dev]"
 
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8501
 
+CMD ["python3.11", "-m", "streamlit", "run", "src/viavsr/ui/app.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true"]
