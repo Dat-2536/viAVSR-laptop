@@ -19,6 +19,8 @@ UPLOAD_DIR = ROOT / "uploads"
 SAMPLE_DIR = ROOT / "samples" / "webcam"
 OUTPUT_ROOT = ROOT / "outputs" / "demo"
 CLIP_SECONDS = 8
+# FFmpeg/ffprobe often report a few frames over the trim length (e.g. 8.08s for -t 8).
+DURATION_SLACK = 0.5
 
 st.set_page_config(page_title="viAVSR", layout="wide")
 
@@ -194,7 +196,7 @@ if media_path and media_path.is_file():
                     output_root=OUTPUT_ROOT,
                     tracking_device="cpu",
                     decoder=decoder,
-                    max_duration_seconds=float(CLIP_SECONDS),
+                    max_duration_seconds=float(CLIP_SECONDS + DURATION_SLACK),
                     max_detection_size=320,
                     visual_fallback_policy="whole_utterance",
                 )
