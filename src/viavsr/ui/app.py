@@ -18,9 +18,11 @@ CONFIG = ROOT / "configs" / "config.yaml"
 UPLOAD_DIR = ROOT / "uploads"
 SAMPLE_DIR = ROOT / "samples" / "webcam"
 OUTPUT_ROOT = ROOT / "outputs" / "demo"
-CLIP_SECONDS = 8
+DEFAULT_CLIP_SECONDS = 8
+FAST_CLIP_SECONDS = 5
 # FFmpeg/ffprobe often report a few frames over the trim length (e.g. 8.08s for -t 8).
 DURATION_SLACK = 0.5
+ON_CLOUD = Path("/mount/src").is_dir()
 
 st.set_page_config(page_title="viAVSR", layout="wide")
 
@@ -30,10 +32,13 @@ RECORDER = components.declare_component(
 )
 
 st.title("viAVSR")
-st.caption(
-    f"Clips longer than {CLIP_SECONDS}s are trimmed. "
-    "Inference on CPU may take several minutes on Streamlit Cloud."
-)
+if ON_CLOUD:
+    st.info(
+        "Streamlit Cloud dùng **CPU yếu**. Một lần chạy thường **5–15 phút** "
+        "(lần đầu còn tải model ~1.7GB). Để nhanh hơn: bật **Fast mode** hoặc chạy local."
+    )
+else:
+    st.caption("Clips dài hơn giới hạn sẽ được cắt. CPU local thường mất vài phút.")
 
 
 def _tool(name: str) -> str | None:
@@ -97,7 +102,17 @@ def _duration_seconds(src: Path) -> float | None:
     return duration
 
 
-def _prepare_media(src: Path) -> Path:
+@st.cache_resource(show_spinner=False)
+def _ensure_tokenizer_assets() -> None:
+    """Download pinned tokenizer files on first run (not committed to git)."""
+    from viavsr.inference import load_model_assets_config
+    from viavsr.inference.tokenizer_assets import fetch_tokenizer_assets
+
+    config = load_model_assets_config(CONFIG)
+    fetch_tokenizer_assets(config.tokenizer_model_path, config.tokenizer_units_path)
+
+
+def _prepare_media(src: Path, clip_seconds: float) -> Path:
     ffmpeg = _tool("ffmpeg")
     if ffmpeg is None:
         raise RuntimeError("FFmpeg was not found. Activate the viavsr conda env and retry.")
@@ -110,7 +125,7 @@ def _prepare_media(src: Path) -> Path:
             "-ss",
             "0",
             "-t",
-            str(CLIP_SECONDS),
+            str(clip_seconds),
             "-i",
             str(src),
             "-vf",
@@ -169,14 +184,34 @@ else:
             st.session_state.media_path = media_path
 
 if media_path and media_path.is_file():
+    fast_mode = st.checkbox(
+        "Fast mode (clip ngắn hơn, face detection nhẹ hơn — nhanh ~2× trên Cloud)",
+        value=ON_CLOUD,
+    )
+    clip_seconds = float(
+        st.slider(
+            "Clip length (seconds)",
+            min_value=4,
+            max_value=8,
+            value=FAST_CLIP_SECONDS if fast_mode else DEFAULT_CLIP_SECONDS,
+            disabled=fast_mode,
+        )
+    )
+    max_detection = 256 if fast_mode else 320
+
     duration = _duration_seconds(media_path)
-    if duration is not None and duration > CLIP_SECONDS:
+    if duration is not None and duration > clip_seconds:
         st.warning(
-            f"This file is {duration:.1f}s. Only the first {CLIP_SECONDS}s will be used."
+            f"This file is {duration:.1f}s. Only the first {clip_seconds:.0f}s will be used."
         )
     st.video(str(media_path))
 
-    decoder = st.selectbox("Decoder", ("ctc_greedy", "joint_beam_search"))
+    decoder = st.selectbox(
+        "Decoder",
+        ("ctc_greedy", "joint_beam_search"),
+        index=0,
+        help="ctc_greedy nhanh hơn; joint_beam_search chậm hơn nhưng đôi khi chính xác hơn.",
+    )
     run = st.button("Run inference", type="primary")
     if run:
         try:
@@ -185,9 +220,14 @@ if media_path and media_path.is_file():
                     "Set **HF_TOKEN** in Streamlit Cloud secrets so the model can download from Hugging Face."
                 )
             with st.status("Working…", expanded=True) as status:
-                status.write("Trimming and scaling the clip…")
-                prepared = _prepare_media(media_path)
-                status.write("Loading model and running inference (CPU). Leave this tab open.")
+                status.write("0/3 — Tải tokenizer (lần đầu ~300KB)…")
+                _ensure_tokenizer_assets()
+                status.write("1/3 — Cắt và scale video…")
+                prepared = _prepare_media(media_path, clip_seconds)
+                status.write(
+                    "2/3 — Face tracking + tải model AV-HuBERT (~1.7GB). "
+                    "Cloud CPU có thể **10–25 phút**; giữ tab mở."
+                )
                 from viavsr.demo import run_end_to_end_demo
 
                 result = run_end_to_end_demo(
@@ -196,10 +236,11 @@ if media_path and media_path.is_file():
                     output_root=OUTPUT_ROOT,
                     tracking_device="cpu",
                     decoder=decoder,
-                    max_duration_seconds=float(CLIP_SECONDS + DURATION_SLACK),
-                    max_detection_size=320,
+                    max_duration_seconds=float(clip_seconds + DURATION_SLACK),
+                    max_detection_size=max_detection,
                     visual_fallback_policy="whole_utterance",
                 )
+                status.write("3/3 — Hoàn tất.")
                 status.update(label="Finished", state="complete")
             st.session_state.result = result
         except Exception as exc:
@@ -218,6 +259,20 @@ if "result" in st.session_state:
     cols[0].metric("Status", result.get("status", ""))
     cols[1].metric("Modality", modality.get("selected_mode", ""))
     cols[2].metric("Time (s)", f"{result.get('timings_seconds', {}).get('total', 0):.1f}")
+
+    timings = result.get("timings_seconds") or {}
+    if timings:
+        parts = []
+        for key in (
+            "face_tracking",
+            "model_loading",
+            "inference",
+            "mouth_roi",
+        ):
+            if key in timings and timings[key]:
+                parts.append(f"{key}: {timings[key]:.1f}s")
+        if parts:
+            st.caption("Thời gian từng bước: " + " · ".join(parts))
 
     mouth = artifacts.get("mouth_roi")
     if mouth and Path(mouth).is_file():
