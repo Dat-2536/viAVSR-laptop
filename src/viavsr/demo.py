@@ -308,12 +308,6 @@ def run_end_to_end_demo(
             max_detection_size=max_detection_size,
             visual_fallback_policy=visual_fallback_policy,
         )
-        quality_policy = load_face_tracking_quality_policy(resolved_config)
-        if confidence_threshold is not None:
-            quality_policy = replace(
-                quality_policy,
-                min_detection_confidence=confidence_threshold,
-            )
 
         stage = "media_preflight"
         stage_started = time.perf_counter()
@@ -358,6 +352,12 @@ def run_end_to_end_demo(
             payload["mouth_roi_display"] = display_report
             payload["timings_seconds"]["mouth_roi_display"] = 0.0
         else:
+            quality_policy = load_face_tracking_quality_policy(resolved_config)
+            if confidence_threshold is not None:
+                quality_policy = replace(
+                    quality_policy,
+                    min_detection_confidence=confidence_threshold,
+                )
             stage = "face_tracking_backend"
             stage_started = time.perf_counter()
             landmarker = FANFaceLandmarker(
