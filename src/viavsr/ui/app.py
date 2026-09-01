@@ -21,6 +21,47 @@ if _src in sys.path:
     sys.path.remove(_src)
 sys.path.insert(0, _src)
 
+
+def _ensure_repo_viavsr() -> None:
+    """Prefer this repository over a stale pip-installed viavsr package."""
+    src = SRC.resolve()
+    src_str = str(src)
+    if sys.path[0] != src_str:
+        if src_str in sys.path:
+            sys.path.remove(src_str)
+        sys.path.insert(0, src_str)
+
+    pkg_init = (src / "viavsr" / "__init__.py").resolve()
+    expected_demo = (src / "viavsr" / "demo.py").resolve()
+    if not pkg_init.is_file():
+        return
+
+    def _origin(module_name: str) -> Path | None:
+        module = sys.modules.get(module_name)
+        if module is None:
+            return None
+        module_file = getattr(module, "__file__", None)
+        if not module_file:
+            return None
+        return Path(module_file).resolve()
+
+    stale = False
+    pkg_origin = _origin("viavsr")
+    if pkg_origin is not None and pkg_origin != pkg_init:
+        stale = True
+    demo_origin = _origin("viavsr.demo")
+    if demo_origin is not None and demo_origin != expected_demo:
+        stale = True
+
+    if stale:
+        for name in list(sys.modules):
+            if name == "viavsr" or name.startswith("viavsr."):
+                del sys.modules[name]
+        importlib.invalidate_caches()
+
+
+_ensure_repo_viavsr()
+
 CONFIG = ROOT / "configs" / "config.yaml"
 UPLOAD_DIR = ROOT / "uploads"
 SAMPLE_DIR = ROOT / "samples" / "webcam"
@@ -370,6 +411,7 @@ def _duration_seconds(src: Path) -> float | None:
 @st.cache_resource(show_spinner=False)
 def _ensure_tokenizer_assets() -> None:
     """Download pinned tokenizer files on first run (not committed to git)."""
+    _ensure_repo_viavsr()
     from viavsr.inference import load_model_assets_config
     from viavsr.inference.tokenizer_assets import fetch_tokenizer_assets
 
@@ -391,6 +433,7 @@ def _configure_torch_speed() -> None:
 @st.cache_resource(show_spinner="Đang tải model…")
 def _load_cached_model_assets():
     """Keep one model instance in memory across reruns (saves ~1.7 GB per inference)."""
+    _ensure_repo_viavsr()
     from viavsr.inference import load_model_assets_config, load_vietnamese_avsr_assets
 
     _ensure_tokenizer_assets()
@@ -543,27 +586,34 @@ def _prepare_media_fast_audio(src: Path, clip_seconds: float) -> Path:
 
 def _import_demo_runner():
     """Always use demo.py from this repository (not a stale pip install)."""
-    expected = (SRC / "viavsr" / "demo.py").resolve()
-    if not expected.is_file():
+    _ensure_repo_viavsr()
+    demo_path = (SRC / "viavsr" / "demo.py").resolve()
+    if not demo_path.is_file():
         from viavsr.demo import run_end_to_end_demo
 
         return run_end_to_end_demo
 
-    existing = sys.modules.get("viavsr.demo")
-    if existing is not None:
-        existing_path = Path(getattr(existing, "__file__", "") or "").resolve()
-        if existing_path != expected:
-            del sys.modules["viavsr.demo"]
-            importlib.invalidate_caches()
+    import importlib.util
 
-    from viavsr.demo import run_end_to_end_demo
+    if "viavsr" not in sys.modules:
+        importlib.import_module("viavsr")
 
-    module = sys.modules.get(run_end_to_end_demo.__module__)
-    module_file = Path(getattr(module, "__file__", "") or "").resolve()
-    if module_file != expected:
+    spec = importlib.util.spec_from_file_location(
+        "viavsr.demo",
+        demo_path,
+        submodule_search_locations=[str(SRC / "viavsr")],
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Không load được {demo_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["viavsr.demo"] = module
+    spec.loader.exec_module(module)
+    run_end_to_end_demo = module.run_end_to_end_demo
+
+    if "skip_face_tracking" not in inspect.signature(run_end_to_end_demo).parameters:
         raise RuntimeError(
-            f"Đang load demo.py sai chỗ ({module_file}). "
-            f"Cần file trong repo: {expected}. "
+            f"File {demo_path} thiếu tham số skip_face_tracking. "
             "Chạy `pip install -e .` trong thư mục dự án rồi khởi động lại Streamlit."
         )
     return run_end_to_end_demo
