@@ -73,6 +73,7 @@ ON_CLOUD = Path("/mount/src").is_dir()
 CLOUD_MAX_WIDTH = 360
 LOCAL_MAX_WIDTH = 480
 TORCH_THREADS = 2 if ON_CLOUD else min(4, os.cpu_count() or 4)
+_TORCH_SPEED_CONFIGURED = False
 
 if ON_CLOUD:
     os.environ.setdefault("OMP_NUM_THREADS", str(TORCH_THREADS))
@@ -420,24 +421,33 @@ def _ensure_tokenizer_assets() -> None:
 
 
 def _configure_torch_speed() -> None:
+    global _TORCH_SPEED_CONFIGURED
+    if _TORCH_SPEED_CONFIGURED:
+        return
     import torch
 
     torch.set_num_threads(TORCH_THREADS)
-    torch.set_num_interop_threads(max(1, TORCH_THREADS // 2))
+    try:
+        torch.set_num_interop_threads(max(1, TORCH_THREADS // 2))
+    except RuntimeError:
+        pass
     if hasattr(torch.backends, "mkldnn"):
         torch.backends.mkldnn.enabled = True
     if hasattr(torch, "set_float32_matmul_precision"):
         torch.set_float32_matmul_precision("medium")
+    _TORCH_SPEED_CONFIGURED = True
 
+
+_configure_torch_speed()
 
 @st.cache_resource(show_spinner="Đang tải model…")
 def _load_cached_model_assets():
     """Keep one model instance in memory across reruns (saves ~1.7 GB per inference)."""
     _ensure_repo_viavsr()
+    _configure_torch_speed()
     from viavsr.inference import load_model_assets_config, load_vietnamese_avsr_assets
 
     _ensure_tokenizer_assets()
-    _configure_torch_speed()
     config = load_model_assets_config(CONFIG)
     return load_vietnamese_avsr_assets(config)
 
