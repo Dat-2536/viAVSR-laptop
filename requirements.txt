@@ -7,6 +7,8 @@ packaging>=23
 PyYAML==6.0.2
 sentencepiece==0.2.0
 face-alignment==1.5.0
+opencv-python-headless>=4.8,<5
+scikit-image>=0.21
 six==1.17.0
 transformers==4.52.4
 soundfile==0.8.0

@@ -3,26 +3,35 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-from viavsr.demo import run_end_to_end_demo
-
 ROOT = Path(__file__).resolve().parents[3]
+SRC = ROOT / "src"
+if SRC.is_dir() and str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
 CONFIG = ROOT / "configs" / "config.yaml"
 UPLOAD_DIR = ROOT / "uploads"
 SAMPLE_DIR = ROOT / "samples" / "webcam"
 OUTPUT_ROOT = ROOT / "outputs" / "demo"
 CLIP_SECONDS = 8
+
+st.set_page_config(page_title="viAVSR", layout="wide")
+
 RECORDER = components.declare_component(
     "webcam_recorder",
     path=str(Path(__file__).parent / "webcam_recorder"),
 )
 
-st.set_page_config(page_title="viAVSR", layout="wide")
 st.title("viAVSR")
+st.caption(
+    f"Clips longer than {CLIP_SECONDS}s are trimmed. "
+    "Inference on CPU may take several minutes on Streamlit Cloud."
+)
 
 
 def _tool(name: str) -> str | None:
@@ -169,12 +178,16 @@ if media_path and media_path.is_file():
     run = st.button("Run inference", type="primary")
     if run:
         try:
+            if not os.environ.get("HF_TOKEN") and not os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+                st.warning(
+                    "Set **HF_TOKEN** in Streamlit Cloud secrets so the model can download from Hugging Face."
+                )
             with st.status("Working…", expanded=True) as status:
                 status.write("Trimming and scaling the clip…")
                 prepared = _prepare_media(media_path)
-                status.write(
-                    "Face tracking + inference on CPU. This often takes 2–5 minutes; leave the tab open."
-                )
+                status.write("Loading model and running inference (CPU). Leave this tab open.")
+                from viavsr.demo import run_end_to_end_demo
+
                 result = run_end_to_end_demo(
                     config_path=CONFIG,
                     media_path=prepared,
