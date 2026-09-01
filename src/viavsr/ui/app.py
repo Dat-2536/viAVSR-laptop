@@ -33,8 +33,7 @@ if ON_CLOUD:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 st.set_page_config(
-    page_title="viAVSR — Vietnamese AVSR",
-    page_icon="🎙️",
+    page_title="viAVSR",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -46,49 +45,104 @@ RECORDER = components.declare_component(
 
 st.markdown(
     """
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-    .block-container { padding-top: 1.5rem; max-width: 1100px; }
-    .viavsr-hero {
-        background: linear-gradient(135deg, #312e81 0%, #4338ca 45%, #6366f1 100%);
-        border-radius: 16px;
-        padding: 1.75rem 2rem;
-        margin-bottom: 1.25rem;
-        color: #f8fafc;
-        box-shadow: 0 12px 40px rgba(49, 46, 129, 0.35);
+    .block-container { padding-top: 2rem; max-width: 960px; }
+    html, body, [class*="css"] { font-family: "IBM Plex Sans", sans-serif; color: #1a1a1a; }
+    div[data-testid="stSidebar"] {
+        background: #fafaf8;
+        border-right: 1px solid #e8e8e4;
     }
-    .viavsr-hero h1 { margin: 0 0 0.35rem 0; font-size: 1.85rem; font-weight: 700; color: #fff; }
-    .viavsr-hero p { margin: 0; opacity: 0.92; font-size: 0.95rem; line-height: 1.5; }
-    .viavsr-card {
-        background: rgba(30, 41, 59, 0.65);
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        border-radius: 12px;
-        padding: 1.1rem 1.25rem;
+    div[data-testid="stSidebar"] .stMarkdown h3 {
+        font-family: "Instrument Serif", serif;
+        font-weight: 400;
+        letter-spacing: -0.02em;
+    }
+    .masthead {
+        border-bottom: 2px solid #1a1a1a;
+        padding-bottom: 1.5rem;
+        margin-bottom: 2rem;
+    }
+    .masthead-kicker {
+        display: block;
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: #6b6b68;
+        margin-bottom: 0.5rem;
+    }
+    .masthead h1 {
+        font-family: "Instrument Serif", serif;
+        font-size: 3.2rem;
+        font-weight: 400;
+        line-height: 1;
+        margin: 0 0 0.6rem 0;
+        letter-spacing: -0.03em;
+        color: #1a1a1a;
+    }
+    .masthead-lede {
+        margin: 0;
+        font-size: 1.05rem;
+        color: #4a4a47;
+        max-width: 36rem;
+        line-height: 1.55;
+    }
+    .section-label {
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #6b6b68;
         margin-bottom: 0.75rem;
     }
+    .viavsr-card {
+        background: #fafaf8;
+        border: 1px dashed #d4d4d0;
+        padding: 2.5rem 1.5rem;
+        text-align: center;
+        color: #8a8a86;
+        font-size: 0.92rem;
+    }
     .viavsr-transcript {
-        background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
-        border-left: 4px solid #818cf8;
-        border-radius: 0 12px 12px 0;
-        padding: 1.25rem 1.5rem;
-        font-size: 1.35rem;
-        line-height: 1.65;
-        color: #f1f5f9;
-        min-height: 3rem;
+        font-family: "Instrument Serif", serif;
+        font-size: 1.75rem;
+        line-height: 1.5;
+        color: #1a1a1a;
+        padding: 1.5rem 0 1.5rem 1.25rem;
+        margin: 1rem 0 1.5rem;
+        border-left: 3px solid #1a1a1a;
+        background: #fafaf8;
     }
-    .viavsr-badge {
-        display: inline-block;
-        padding: 0.2rem 0.65rem;
-        border-radius: 999px;
-        font-size: 0.78rem;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        margin-right: 0.35rem;
+    .viavsr-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem 1.25rem;
+        margin-bottom: 0.5rem;
+        font-size: 0.8rem;
+        color: #6b6b68;
     }
-    .viavsr-badge-ok { background: rgba(34, 197, 94, 0.2); color: #86efac; }
-    .viavsr-badge-warn { background: rgba(251, 191, 36, 0.2); color: #fde68a; }
-    .viavsr-badge-info { background: rgba(129, 140, 248, 0.25); color: #c7d2fe; }
-    div[data-testid="stSidebar"] { background: #0f172a; }
-    div[data-testid="stSidebar"] .stMarkdown { color: #cbd5e1; }
+    .viavsr-meta span { white-space: nowrap; }
+    .viavsr-meta strong { color: #1a1a1a; font-weight: 600; }
+    div[data-testid="stMetric"] {
+        background: #fafaf8;
+        border: 1px solid #e8e8e4;
+        padding: 0.75rem 1rem;
+    }
+    div[data-testid="stMetric"] label { font-size: 0.72rem !important; letter-spacing: 0.06em; text-transform: uppercase; }
+    .stButton > button[kind="primary"] {
+        background: #1a1a1a !important;
+        color: #fff !important;
+        border: none !important;
+        border-radius: 0 !important;
+        font-weight: 500 !important;
+        letter-spacing: 0.04em !important;
+        padding: 0.65rem 2rem !important;
+    }
+    .stButton > button[kind="primary"]:hover {
+        background: #333 !important;
+    }
+    hr { border-color: #e8e8e4; margin: 2rem 0; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -96,21 +150,14 @@ st.markdown(
 
 st.markdown(
     """
-<div class="viavsr-hero">
+<div class="masthead">
+  <span class="masthead-kicker">Nhận dạng lời nói tiếng Việt</span>
   <h1>viAVSR</h1>
-  <p>Nhận dạng giọng nói tiếng Việt từ video — AV-HuBERT · upload, webcam hoặc mẫu có sẵn.</p>
+  <p class="masthead-lede">Upload video, quay webcam, hoặc chọn mẫu — hệ thống trích xuất và phiên âm câu nói.</p>
 </div>
 """,
     unsafe_allow_html=True,
 )
-
-if ON_CLOUD:
-    st.info(
-        "**Streamlit Cloud:** CPU giới hạn, có thể **bị throttle** sau thời gian dài. "
-        "Đang chạy inference thì **đừng push code** lên branch `deploy`. "
-        "Bật **Chỉ audio** trong sidebar để tiết kiệm RAM và thời gian."
-    )
-
 
 def _tool(name: str) -> str | None:
     found = shutil.which(name)
@@ -183,7 +230,7 @@ def _ensure_tokenizer_assets() -> None:
     fetch_tokenizer_assets(config.tokenizer_model_path, config.tokenizer_units_path)
 
 
-@st.cache_resource(show_spinner="Đang tải model AV-HuBERT (~1.7 GB, chỉ lần đầu)…")
+@st.cache_resource(show_spinner="Đang tải model…")
 def _load_cached_model_assets():
     """Keep one model instance in memory across reruns (saves ~1.7 GB per inference)."""
     from viavsr.inference import load_model_assets_config, load_vietnamese_avsr_assets
@@ -241,21 +288,21 @@ def _prepare_media(src: Path, clip_seconds: float, *, max_width: int) -> Path:
 
 
 with st.sidebar:
-    st.markdown("### Cài đặt")
+    st.markdown("### Tuỳ chọn")
     audio_only = st.toggle(
         "Chỉ audio",
         value=ON_CLOUD,
-        help="Bỏ face tracking — nhanh hơn, ít RAM hơn. Khuyên dùng trên Cloud.",
+        help="Không dùng hình miệng, chỉ phân tích âm thanh.",
     )
     fast_mode = st.toggle(
-        "Fast mode",
+        "Rút gọn",
         value=ON_CLOUD and not audio_only,
         disabled=audio_only,
-        help="Clip 5 giây, detection nhẹ hơn.",
+        help="Clip 5 giây.",
     )
     clip_seconds = float(
         st.slider(
-            "Độ dài clip (giây)",
+            "Độ dài clip",
             min_value=4,
             max_value=8,
             value=FAST_CLIP_SECONDS if fast_mode else DEFAULT_CLIP_SECONDS,
@@ -268,20 +315,14 @@ with st.sidebar:
         "Decoder",
         ("ctc_greedy", "joint_beam_search"),
         index=0,
-        help="ctc_greedy nhanh hơn; joint_beam_search đôi khi chính xác hơn.",
-    )
-    st.divider()
-    st.caption(
-        f"{'☁️ Cloud' if ON_CLOUD else '💻 Local'} · "
-        f"scale ≤{max_width}px · clip {clip_seconds:.0f}s"
     )
     if not os.environ.get("HF_TOKEN") and not os.environ.get("HUGGING_FACE_HUB_TOKEN"):
-        st.warning("Thiếu **HF_TOKEN** trong Secrets — model không tải được từ Hugging Face.")
+        st.warning("Cần HF_TOKEN trong Secrets.")
 
 input_col, preview_col = st.columns([1, 1], gap="large")
 
 with input_col:
-    st.markdown("#### Nguồn video")
+    st.markdown('<p class="section-label">Nguồn</p>', unsafe_allow_html=True)
     source = st.radio(
         "Chọn nguồn",
         ("Upload", "Webcam", "Sample"),
@@ -326,7 +367,7 @@ with input_col:
                 st.session_state.media_path = media_path
 
 with preview_col:
-    st.markdown("#### Xem trước")
+    st.markdown('<p class="section-label">Xem trước</p>', unsafe_allow_html=True)
     if media_path and media_path.is_file():
         duration = _duration_seconds(media_path)
         if duration is not None and duration > clip_seconds:
@@ -336,33 +377,27 @@ with preview_col:
         st.video(str(media_path))
     else:
         st.markdown(
-            '<div class="viavsr-card" style="text-align:center;color:#94a3b8;">'
-            "Chọn hoặc quay video để xem trước tại đây."
-            "</div>",
+            '<div class="viavsr-card">Chưa có video.</div>',
             unsafe_allow_html=True,
         )
 
-run = st.button("▶ Chạy nhận dạng", type="primary", disabled=not (media_path and media_path.is_file()))
+run = st.button("Chạy nhận dạng", type="primary", disabled=not (media_path and media_path.is_file()))
 
 if run and media_path and media_path.is_file():
     try:
         with st.status("Đang xử lý…", expanded=True) as status:
-            status.write("① Tải tokenizer (lần đầu ~300 KB)…")
+            status.write("Chuẩn bị tokenizer…")
             _ensure_tokenizer_assets()
-            status.write("② Cắt và scale video…")
+            status.write("Xử lý video…")
             prepared = _prepare_media(
                 media_path,
                 clip_seconds,
                 max_width=max_width,
             )
             status.write(
-                "③ "
-                + (
-                    "Tải model (lần đầu ~1.7 GB) + inference audio-only…"
-                    if audio_only
-                    else "Face tracking + model + inference…"
-                )
-                + " **Giữ tab mở**, đừng push git."
+                "Nhận dạng…"
+                if audio_only
+                else "Theo dõi khuôn mặt và nhận dạng…"
             )
             assets = _load_cached_model_assets()
             from viavsr.demo import run_end_to_end_demo
@@ -379,8 +414,8 @@ if run and media_path and media_path.is_file():
                 skip_face_tracking=audio_only,
                 preloaded_assets=assets,
             )
-            status.write("④ Hoàn tất.")
-            status.update(label="Xong", state="complete")
+            status.write("Xong.")
+            status.update(label="Hoàn tất", state="complete")
         st.session_state.result = result
         gc.collect()
     except Exception as exc:
@@ -395,17 +430,17 @@ if "result" in st.session_state:
     status = result.get("status", "")
     transcript = inner.get("transcript") or "(trống)"
 
-    st.markdown("---")
-    st.markdown("#### Kết quả")
+    st.markdown('<p class="section-label">Kết quả</p>', unsafe_allow_html=True)
 
-    badge_class = "viavsr-badge-ok" if status == "passed" else "viavsr-badge-warn"
     mode = modality.get("selected_mode", "—")
     total_s = timings.get("total", 0)
 
     st.markdown(
-        f'<span class="viavsr-badge {badge_class}">{status.upper()}</span>'
-        f'<span class="viavsr-badge viavsr-badge-info">{mode}</span>'
-        f'<span class="viavsr-badge viavsr-badge-info">{total_s:.1f}s</span>',
+        f'<div class="viavsr-meta">'
+        f'<span>Trạng thái: <strong>{html.escape(status)}</strong></span>'
+        f'<span>Chế độ: <strong>{html.escape(mode.replace("_", " "))}</strong></span>'
+        f'<span>Thời gian: <strong>{total_s:.1f}s</strong></span>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -415,13 +450,9 @@ if "result" in st.session_state:
     )
 
     metric_cols = st.columns(4)
-    metric_cols[0].metric("Thời gian", f"{total_s:.1f}s")
+    metric_cols[0].metric("Tổng", f"{total_s:.1f}s")
     metric_cols[1].metric("Modality", mode.replace("_", " "))
-    metric_cols[2].metric(
-        "Model load",
-        f"{timings.get('model_loading', 0):.1f}s",
-        help="0s nếu model đã cache từ lần chạy trước.",
-    )
+    metric_cols[2].metric("Model", f"{timings.get('model_loading', 0):.1f}s")
     metric_cols[3].metric("Inference", f"{timings.get('inference', 0):.1f}s")
 
     step_keys = ("face_tracking", "mouth_roi", "model_loading", "inference")
@@ -431,11 +462,11 @@ if "result" in st.session_state:
         if key in timings and timings[key]
     ]
     if step_parts:
-        st.caption("Chi tiết: " + " · ".join(step_parts))
+        st.caption(" · ".join(step_parts))
 
     mouth = artifacts.get("mouth_roi")
     if mouth and Path(mouth).is_file():
-        with st.expander("Video miệng đã xử lý"):
+        with st.expander("Video miệng"):
             st.video(mouth)
 
     warnings = result.get("warnings") or []
@@ -444,5 +475,5 @@ if "result" in st.session_state:
     if status != "passed" and result.get("error"):
         st.error(result["error"].get("message", "Inference failed"))
 
-    with st.expander("Báo cáo đầy đủ (JSON)"):
+    with st.expander("Báo cáo JSON"):
         st.json(result)
