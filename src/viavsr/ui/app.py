@@ -1,20 +1,25 @@
 import base64
 import gc
 import html
+import importlib
+import inspect
 import json
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-ROOT = Path(__file__).resolve().parents[3]
-SRC = ROOT / "src"
-if SRC.is_dir() and str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+SRC = Path(__file__).resolve().parents[2]
+ROOT = SRC.parent
+_src = str(SRC)
+if _src in sys.path:
+    sys.path.remove(_src)
+sys.path.insert(0, _src)
 
 CONFIG = ROOT / "configs" / "config.yaml"
 UPLOAD_DIR = ROOT / "uploads"
@@ -26,10 +31,11 @@ DURATION_SLACK = 0.5
 ON_CLOUD = Path("/mount/src").is_dir()
 CLOUD_MAX_WIDTH = 360
 LOCAL_MAX_WIDTH = 480
+TORCH_THREADS = 2 if ON_CLOUD else min(4, os.cpu_count() or 4)
 
 if ON_CLOUD:
-    os.environ.setdefault("OMP_NUM_THREADS", "1")
-    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("OMP_NUM_THREADS", str(TORCH_THREADS))
+    os.environ.setdefault("MKL_NUM_THREADS", str(TORCH_THREADS))
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 st.set_page_config(
@@ -43,106 +49,248 @@ RECORDER = components.declare_component(
     path=str(Path(__file__).parent / "webcam_recorder"),
 )
 
+
+def _bootstrap_hf_credentials() -> None:
+    """Expose HF token to huggingface_hub from env, Streamlit secrets, or CLI login."""
+    if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+        return
+    try:
+        for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "hf_token"):
+            value = st.secrets.get(name)
+            if value:
+                os.environ.setdefault("HF_TOKEN", str(value))
+                return
+    except (FileNotFoundError, KeyError, AttributeError, TypeError):
+        pass
+
+
+def _hf_credentials_ready() -> bool:
+    _bootstrap_hf_credentials()
+    if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+        return True
+    token_file = Path.home() / ".cache" / "huggingface" / "token"
+    try:
+        return token_file.is_file() and token_file.read_text(encoding="utf-8").strip() != ""
+    except OSError:
+        return token_file.is_file()
+
+
+_bootstrap_hf_credentials()
+
 st.markdown(
     """
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;1,9..144,400&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-    .block-container { padding-top: 2rem; max-width: 960px; }
-    html, body, [class*="css"] { font-family: "IBM Plex Sans", sans-serif; color: #1a1a1a; }
+    /* Streamlit chrome che kicker — ẩn header/footer mặc định */
+    header[data-testid="stHeader"],
+    footer,
+    [data-testid="stDecoration"] {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+        min-height: 0 !important;
+    }
+    .stApp {
+        background-color: #ffffff;
+        background-image: radial-gradient(#e8e6e1 0.65px, transparent 0.65px);
+        background-size: 18px 18px;
+    }
+    .block-container {
+        padding-top: 2.25rem !important;
+        padding-bottom: 4rem !important;
+        max-width: 1040px;
+    }
+    html, body, [class*="css"] {
+        font-family: "DM Sans", sans-serif;
+        color: #1a1a1a;
+    }
+
+    /* Sidebar */
     div[data-testid="stSidebar"] {
-        background: #fafaf8;
-        border-right: 1px solid #e8e8e4;
+        background: #ffffff;
+        border-right: 1px solid #e5e2dc;
+    }
+    div[data-testid="stSidebar"] > div:first-child {
+        padding-top: 2rem;
     }
     div[data-testid="stSidebar"] .stMarkdown h3 {
-        font-family: "Instrument Serif", serif;
-        font-weight: 400;
+        font-family: "Fraunces", serif;
+        font-weight: 600;
+        font-size: 1.35rem;
         letter-spacing: -0.02em;
     }
-    .masthead {
-        border-bottom: 2px solid #1a1a1a;
-        padding-bottom: 1.5rem;
-        margin-bottom: 2rem;
+
+    /* Hero */
+    .hero {
+        margin-bottom: 2.75rem;
+        padding-top: 0.25rem;
     }
-    .masthead-kicker {
-        display: block;
-        font-size: 0.72rem;
+    .hero-eyebrow {
+        margin: 0 0 1.1rem;
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: #c45c26;
+    }
+    .hero-title {
+        font-family: "Fraunces", serif;
+        font-size: clamp(3.25rem, 9vw, 5.5rem);
+        font-weight: 600;
+        line-height: 0.92;
+        margin: 0 0 1rem;
+        letter-spacing: -0.045em;
+        color: #1a1a1a;
+    }
+    .hero-title em {
+        font-style: italic;
+        font-weight: 300;
+        color: #c45c26;
+    }
+    .hero-tagline {
+        margin: 0 0 1.75rem;
+        font-size: 1.08rem;
+        line-height: 1.6;
+        color: #5c5c58;
+        max-width: 28rem;
+    }
+    .hero-rule {
+        height: 3px;
+        background: #1a1a1a;
+        position: relative;
+    }
+    .hero-rule::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 88px;
+        height: 3px;
+        background: #c45c26;
+    }
+
+    /* Sections */
+    .section-label {
+        display: flex;
+        align-items: baseline;
+        gap: 0.65rem;
+        font-size: 0.68rem;
         font-weight: 600;
         letter-spacing: 0.14em;
         text-transform: uppercase;
-        color: #6b6b68;
-        margin-bottom: 0.5rem;
-    }
-    .masthead h1 {
-        font-family: "Instrument Serif", serif;
-        font-size: 3.2rem;
-        font-weight: 400;
-        line-height: 1;
-        margin: 0 0 0.6rem 0;
-        letter-spacing: -0.03em;
-        color: #1a1a1a;
-    }
-    .masthead-lede {
-        margin: 0;
-        font-size: 1.05rem;
-        color: #4a4a47;
-        max-width: 36rem;
-        line-height: 1.55;
-    }
-    .section-label {
-        font-size: 0.72rem;
-        font-weight: 600;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        color: #6b6b68;
-        margin-bottom: 0.75rem;
-    }
-    .viavsr-card {
-        background: #fafaf8;
-        border: 1px dashed #d4d4d0;
-        padding: 2.5rem 1.5rem;
-        text-align: center;
         color: #8a8a86;
-        font-size: 0.92rem;
+        margin: 0 0 1rem;
+    }
+    .section-num {
+        font-family: "Fraunces", serif;
+        font-size: 1.1rem;
+        font-weight: 600;
+        letter-spacing: 0;
+        color: #c45c26;
+        text-transform: none;
+    }
+
+    /* Panels — Streamlit bordered containers */
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        border-color: #e5e2dc !important;
+        border-radius: 2px !important;
+        background: #ffffff !important;
+        box-shadow: 0 8px 32px rgba(26, 26, 26, 0.04) !important;
+        padding: 0.25rem 0.5rem !important;
+    }
+
+    .viavsr-empty {
+        border: 1px dashed #d8d4cc;
+        background: #faf9f7;
+        padding: 3rem 1.5rem;
+        text-align: center;
+        color: #9a9690;
+        font-size: 0.9rem;
+        min-height: 180px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    /* Transcript */
+    .viavsr-transcript-wrap {
+        margin: 1.25rem 0 1.75rem;
     }
     .viavsr-transcript {
-        font-family: "Instrument Serif", serif;
-        font-size: 1.75rem;
-        line-height: 1.5;
+        font-family: "Fraunces", serif;
+        font-size: clamp(1.55rem, 2.8vw, 2.35rem);
+        font-weight: 400;
+        line-height: 1.48;
         color: #1a1a1a;
-        padding: 1.5rem 0 1.5rem 1.25rem;
-        margin: 1rem 0 1.5rem;
-        border-left: 3px solid #1a1a1a;
-        background: #fafaf8;
+        padding: 2rem 2rem 2rem 2.25rem;
+        margin: 0;
+        background: #ffffff;
+        border: 2px solid #1a1a1a;
+        box-shadow: 6px 6px 0 #c45c26;
     }
     .viavsr-meta {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.5rem 1.25rem;
-        margin-bottom: 0.5rem;
-        font-size: 0.8rem;
+        gap: 0.75rem 1.5rem;
+        font-size: 0.78rem;
         color: #6b6b68;
+        padding-bottom: 0.25rem;
     }
     .viavsr-meta span { white-space: nowrap; }
-    .viavsr-meta strong { color: #1a1a1a; font-weight: 600; }
-    div[data-testid="stMetric"] {
-        background: #fafaf8;
-        border: 1px solid #e8e8e4;
-        padding: 0.75rem 1rem;
+    .viavsr-meta strong {
+        color: #1a1a1a;
+        font-weight: 600;
+        text-transform: capitalize;
     }
-    div[data-testid="stMetric"] label { font-size: 0.72rem !important; letter-spacing: 0.06em; text-transform: uppercase; }
+
+    /* Metrics */
+    div[data-testid="stMetric"] {
+        background: #faf9f7;
+        border: 1px solid #e5e2dc;
+        padding: 0.85rem 1rem;
+        border-radius: 2px;
+    }
+    div[data-testid="stMetric"] label {
+        font-size: 0.65rem !important;
+        letter-spacing: 0.1em !important;
+        text-transform: uppercase !important;
+        color: #8a8a86 !important;
+    }
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+        font-family: "Fraunces", serif !important;
+        font-size: 1.35rem !important;
+    }
+
+    /* Primary button */
     .stButton > button[kind="primary"] {
         background: #1a1a1a !important;
         color: #fff !important;
-        border: none !important;
-        border-radius: 0 !important;
-        font-weight: 500 !important;
-        letter-spacing: 0.04em !important;
-        padding: 0.65rem 2rem !important;
+        border: 2px solid #1a1a1a !important;
+        border-radius: 2px !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.06em !important;
+        text-transform: uppercase !important;
+        font-size: 0.82rem !important;
+        padding: 0.85rem 2.5rem !important;
+        transition: all 0.15s ease !important;
+        box-shadow: 4px 4px 0 #c45c26 !important;
     }
-    .stButton > button[kind="primary"]:hover {
-        background: #333 !important;
+    .stButton > button[kind="primary"]:hover:not(:disabled) {
+        background: #c45c26 !important;
+        border-color: #c45c26 !important;
+        transform: translate(2px, 2px) !important;
+        box-shadow: 2px 2px 0 #1a1a1a !important;
     }
-    hr { border-color: #e8e8e4; margin: 2rem 0; }
+    .stButton > button[kind="primary"]:disabled {
+        opacity: 0.35 !important;
+        box-shadow: none !important;
+    }
+
+    /* Radio / tabs feel */
+    div[data-testid="stRadio"] > div {
+        gap: 0.5rem;
+    }
+    hr { border: none; border-top: 1px solid #e5e2dc; margin: 2.5rem 0; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -150,10 +298,9 @@ st.markdown(
 
 st.markdown(
     """
-<div class="masthead">
-  <span class="masthead-kicker">Nhận dạng lời nói tiếng Việt</span>
-  <h1>viAVSR</h1>
-  <p class="masthead-lede">Upload video, quay webcam, hoặc chọn mẫu — hệ thống trích xuất và phiên âm câu nói.</p>
+<div class="hero">
+  <h1 class="hero-title"><em>vi</em>AVSR</h1>
+  <div class="hero-rule"></div>
 </div>
 """,
     unsafe_allow_html=True,
@@ -230,27 +377,55 @@ def _ensure_tokenizer_assets() -> None:
     fetch_tokenizer_assets(config.tokenizer_model_path, config.tokenizer_units_path)
 
 
+def _configure_torch_speed() -> None:
+    import torch
+
+    torch.set_num_threads(TORCH_THREADS)
+    torch.set_num_interop_threads(max(1, TORCH_THREADS // 2))
+    if hasattr(torch.backends, "mkldnn"):
+        torch.backends.mkldnn.enabled = True
+    if hasattr(torch, "set_float32_matmul_precision"):
+        torch.set_float32_matmul_precision("medium")
+
+
 @st.cache_resource(show_spinner="Đang tải model…")
 def _load_cached_model_assets():
     """Keep one model instance in memory across reruns (saves ~1.7 GB per inference)."""
     from viavsr.inference import load_model_assets_config, load_vietnamese_avsr_assets
 
     _ensure_tokenizer_assets()
+    _configure_torch_speed()
     config = load_model_assets_config(CONFIG)
-    assets = load_vietnamese_avsr_assets(config)
-    if ON_CLOUD:
-        import torch
-
-        torch.set_num_threads(1)
-    return assets
+    return load_vietnamese_avsr_assets(config)
 
 
-def _prepare_media(src: Path, clip_seconds: float, *, max_width: int) -> Path:
+@st.cache_resource(show_spinner=False)
+def _startup_warmup() -> bool:
+    """Load tokenizer + model once when the app opens (inference runs skip model load)."""
+    _load_cached_model_assets()
+    return True
+
+
+def _prepare_media(
+    src: Path,
+    clip_seconds: float,
+    *,
+    max_width: int,
+    audio_only: bool = False,
+    fast: bool = False,
+) -> Path:
+    if audio_only:
+        return _prepare_media_fast_audio(src, clip_seconds)
     ffmpeg = _tool("ffmpeg")
     if ffmpeg is None:
         raise RuntimeError("FFmpeg was not found. Activate the viavsr conda env and retry.")
     dest = UPLOAD_DIR / f"{src.stem}_prep.mp4"
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    video_codec = (
+        ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-pix_fmt", "yuv420p"]
+        if fast
+        else ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
+    )
     result = subprocess.run(
         [
             ffmpeg,
@@ -265,10 +440,7 @@ def _prepare_media(src: Path, clip_seconds: float, *, max_width: int) -> Path:
             f"scale='min({max_width},iw)':-2",
             "-r",
             "25",
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
+            *video_codec,
             "-c:a",
             "aac",
             "-ar",
@@ -287,26 +459,159 @@ def _prepare_media(src: Path, clip_seconds: float, *, max_width: int) -> Path:
     return dest
 
 
+def _prepare_media_fast_audio(src: Path, clip_seconds: float) -> Path:
+    """Trim clip with stream copy when possible; minimal re-encode otherwise."""
+    ffmpeg = _tool("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("FFmpeg was not found. Activate the viavsr conda env and retry.")
+    dest = UPLOAD_DIR / f"{src.stem}_fast.mp4"
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+    copy_cmd = [
+        ffmpeg,
+        "-y",
+        "-ss",
+        "0",
+        "-t",
+        str(clip_seconds),
+        "-i",
+        str(src),
+        "-c",
+        "copy",
+        "-avoid_negative_ts",
+        "make_zero",
+        str(dest),
+    ]
+    result = subprocess.run(
+        copy_cmd,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    if result.returncode == 0 and dest.is_file():
+        return dest
+
+    result = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-ss",
+            "0",
+            "-t",
+            str(clip_seconds),
+            "-i",
+            str(src),
+            "-map",
+            "0:v:0?",
+            "-map",
+            "0:a:0",
+            "-vf",
+            "scale=96:96:force_original_aspect_ratio=decrease,"
+            "pad=96:96:(ow-iw)/2:(oh-ih)/2",
+            "-r",
+            "25",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-crf",
+            "30",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "64k",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-shortest",
+            str(dest),
+        ],
+        capture_output=True,
+        check=False,
+        timeout=45,
+    )
+    if result.returncode != 0 or not dest.is_file():
+        detail = result.stderr.decode("utf-8", errors="replace")[-400:]
+        raise RuntimeError(f"Could not prepare fast audio media.\n{detail}")
+    return dest
+
+
+def _import_demo_runner():
+    """Always use demo.py from this repository (not a stale pip install)."""
+    expected = (SRC / "viavsr" / "demo.py").resolve()
+    if not expected.is_file():
+        from viavsr.demo import run_end_to_end_demo
+
+        return run_end_to_end_demo
+
+    existing = sys.modules.get("viavsr.demo")
+    if existing is not None:
+        existing_path = Path(getattr(existing, "__file__", "") or "").resolve()
+        if existing_path != expected:
+            del sys.modules["viavsr.demo"]
+            importlib.invalidate_caches()
+
+    from viavsr.demo import run_end_to_end_demo
+
+    module = sys.modules.get(run_end_to_end_demo.__module__)
+    module_file = Path(getattr(module, "__file__", "") or "").resolve()
+    if module_file != expected:
+        raise RuntimeError(
+            f"Đang load demo.py sai chỗ ({module_file}). "
+            f"Cần file trong repo: {expected}. "
+            "Chạy `pip install -e .` trong thư mục dự án rồi khởi động lại Streamlit."
+        )
+    return run_end_to_end_demo
+
+
+def _call_run_end_to_end_demo(
+    *,
+    audio_only: bool,
+    preloaded_assets: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    run_end_to_end_demo = _import_demo_runner()
+    params = inspect.signature(run_end_to_end_demo).parameters
+    call_kwargs = {
+        **kwargs,
+        "skip_face_tracking": audio_only,
+        "preloaded_assets": preloaded_assets,
+    }
+    supported = {key: value for key, value in call_kwargs.items() if key in params}
+    if audio_only and "skip_face_tracking" not in params:
+        raise RuntimeError(
+            "demo.py trên máy chưa có tham số skip_face_tracking. "
+            "Cập nhật code (git pull) hoặc chạy `pip install -e .`, "
+            "rồi khởi động lại Streamlit."
+        )
+    return run_end_to_end_demo(**supported)
+
+
 with st.sidebar:
     st.markdown("### Tuỳ chọn")
     audio_only = st.toggle(
         "Chỉ audio",
         value=ON_CLOUD,
-        help="Không dùng hình miệng, chỉ phân tích âm thanh.",
+        help="Không dùng hình miệng — nhanh hơn nhiều.",
     )
     fast_mode = st.toggle(
         "Rút gọn",
-        value=ON_CLOUD and not audio_only,
+        value=True,
         disabled=audio_only,
-        help="Clip 5 giây.",
+        help="Clip 5 giây, encode nhẹ hơn.",
     )
     clip_seconds = float(
         st.slider(
             "Độ dài clip",
-            min_value=4,
+            min_value=3,
             max_value=8,
             value=FAST_CLIP_SECONDS if fast_mode else DEFAULT_CLIP_SECONDS,
-            disabled=fast_mode,
+            disabled=fast_mode and not audio_only,
         )
     )
     max_detection = 256 if fast_mode else 320
@@ -315,73 +620,97 @@ with st.sidebar:
         "Decoder",
         ("ctc_greedy", "joint_beam_search"),
         index=0,
+        help="ctc_greedy nhanh hơn.",
     )
-    if not os.environ.get("HF_TOKEN") and not os.environ.get("HUGGING_FACE_HUB_TOKEN"):
-        st.warning("Cần HF_TOKEN trong Secrets.")
+    if not _hf_credentials_ready():
+        if ON_CLOUD:
+            st.warning("Cần **HF_TOKEN** trong Streamlit Secrets (Cloud).")
+        else:
+            st.warning(
+                "Chưa thấy HF token. Set `$env:HF_TOKEN='hf_...'` **trong cùng terminal** "
+                "rồi chạy lại Streamlit, hoặc `huggingface-cli login`, "
+                "hoặc thêm `HF_TOKEN` vào `.streamlit/secrets.toml`."
+            )
+    _startup_warmup()
 
 input_col, preview_col = st.columns([1, 1], gap="large")
 
 with input_col:
-    st.markdown('<p class="section-label">Nguồn</p>', unsafe_allow_html=True)
-    source = st.radio(
-        "Chọn nguồn",
-        ("Upload", "Webcam", "Sample"),
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-    media_path: Path | None = st.session_state.get("media_path")
-
-    if source == "Upload":
-        uploaded = st.file_uploader(
-            "Video có âm thanh",
-            type=["mp4", "webm", "mov"],
-            label_visibility="collapsed",
-        )
-        if uploaded is not None:
-            media_path = _save_upload(uploaded.name, uploaded.getvalue())
-            st.session_state.media_path = media_path
-
-    elif source == "Webcam":
-        recorded = RECORDER(key="webcam")
-        if recorded:
-            try:
-                media_path = _data_url_to_webm(recorded)
-                st.session_state.media_path = media_path
-            except Exception as exc:
-                st.error(f"Không đọc được bản ghi webcam: {exc}")
-                media_path = None
-
-    else:
-        samples = sorted(SAMPLE_DIR.glob("vi_*.mp4"))
-        if not samples:
-            st.info("Chưa có mẫu tiếng Việt. Dùng Upload hoặc Webcam.")
-        else:
-            choice = st.selectbox(
-                "Mẫu tiếng Việt",
-                samples,
-                format_func=lambda p: p.name,
-                label_visibility="collapsed",
-            )
-            if choice is not None:
-                media_path = choice
-                st.session_state.media_path = media_path
-
-with preview_col:
-    st.markdown('<p class="section-label">Xem trước</p>', unsafe_allow_html=True)
-    if media_path and media_path.is_file():
-        duration = _duration_seconds(media_path)
-        if duration is not None and duration > clip_seconds:
-            st.warning(
-                f"File dài {duration:.1f}s — chỉ dùng {clip_seconds:.0f}s đầu."
-            )
-        st.video(str(media_path))
-    else:
+    with st.container(border=True):
         st.markdown(
-            '<div class="viavsr-card">Chưa có video.</div>',
+            '<p class="section-label"><span class="section-num">01</span> Nguồn</p>',
             unsafe_allow_html=True,
         )
+        source = st.radio(
+            "Chọn nguồn",
+            ("Upload", "Webcam", "Sample"),
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        media_path: Path | None = st.session_state.get("media_path")
 
-run = st.button("Chạy nhận dạng", type="primary", disabled=not (media_path and media_path.is_file()))
+        if source == "Upload":
+            uploaded = st.file_uploader(
+                "Video có âm thanh",
+                type=["mp4", "webm", "mov"],
+                label_visibility="collapsed",
+            )
+            if uploaded is not None:
+                media_path = _save_upload(uploaded.name, uploaded.getvalue())
+                st.session_state.media_path = media_path
+
+        elif source == "Webcam":
+            recorded = RECORDER(key="webcam")
+            if recorded:
+                try:
+                    media_path = _data_url_to_webm(recorded)
+                    st.session_state.media_path = media_path
+                except Exception as exc:
+                    st.error(f"Không đọc được bản ghi webcam: {exc}")
+                    media_path = None
+
+        else:
+            samples = sorted(SAMPLE_DIR.glob("vi_*.mp4"))
+            if not samples:
+                st.info("Chưa có mẫu tiếng Việt. Dùng Upload hoặc Webcam.")
+            else:
+                choice = st.selectbox(
+                    "Mẫu tiếng Việt",
+                    samples,
+                    format_func=lambda p: p.name,
+                    label_visibility="collapsed",
+                )
+                if choice is not None:
+                    media_path = choice
+                    st.session_state.media_path = media_path
+
+with preview_col:
+    with st.container(border=True):
+        st.markdown(
+            '<p class="section-label"><span class="section-num">02</span> Xem trước</p>',
+            unsafe_allow_html=True,
+        )
+        if media_path and media_path.is_file():
+            duration = _duration_seconds(media_path)
+            if duration is not None and duration > clip_seconds:
+                st.warning(
+                    f"File dài {duration:.1f}s — chỉ dùng {clip_seconds:.0f}s đầu."
+                )
+            st.video(str(media_path))
+        else:
+            st.markdown(
+                '<div class="viavsr-empty">Chưa có video</div>',
+                unsafe_allow_html=True,
+            )
+
+_, btn_col, _ = st.columns([1, 1.2, 1])
+with btn_col:
+    run = st.button(
+        "Chạy nhận dạng",
+        type="primary",
+        use_container_width=True,
+        disabled=not (media_path and media_path.is_file()),
+    )
 
 if run and media_path and media_path.is_file():
     try:
@@ -393,6 +722,8 @@ if run and media_path and media_path.is_file():
                 media_path,
                 clip_seconds,
                 max_width=max_width,
+                audio_only=audio_only,
+                fast=fast_mode,
             )
             status.write(
                 "Nhận dạng…"
@@ -400,9 +731,10 @@ if run and media_path and media_path.is_file():
                 else "Theo dõi khuôn mặt và nhận dạng…"
             )
             assets = _load_cached_model_assets()
-            from viavsr.demo import run_end_to_end_demo
 
-            result = run_end_to_end_demo(
+            result = _call_run_end_to_end_demo(
+                audio_only=audio_only,
+                preloaded_assets=assets,
                 config_path=CONFIG,
                 media_path=prepared,
                 output_root=OUTPUT_ROOT,
@@ -411,8 +743,6 @@ if run and media_path and media_path.is_file():
                 max_duration_seconds=float(clip_seconds + DURATION_SLACK),
                 max_detection_size=max_detection,
                 visual_fallback_policy="whole_utterance",
-                skip_face_tracking=audio_only,
-                preloaded_assets=assets,
             )
             status.write("Xong.")
             status.update(label="Hoàn tất", state="complete")
@@ -430,50 +760,56 @@ if "result" in st.session_state:
     status = result.get("status", "")
     transcript = inner.get("transcript") or "(trống)"
 
-    st.markdown('<p class="section-label">Kết quả</p>', unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown(
+            '<p class="section-label"><span class="section-num">03</span> Kết quả</p>',
+            unsafe_allow_html=True,
+        )
 
-    mode = modality.get("selected_mode", "—")
-    total_s = timings.get("total", 0)
+        mode = modality.get("selected_mode", "—")
+        total_s = timings.get("total", 0)
 
-    st.markdown(
-        f'<div class="viavsr-meta">'
-        f'<span>Trạng thái: <strong>{html.escape(status)}</strong></span>'
-        f'<span>Chế độ: <strong>{html.escape(mode.replace("_", " "))}</strong></span>'
-        f'<span>Thời gian: <strong>{total_s:.1f}s</strong></span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+        st.markdown(
+            f'<div class="viavsr-meta">'
+            f'<span>Trạng thái · <strong>{html.escape(status)}</strong></span>'
+            f'<span>Chế độ · <strong>{html.escape(mode.replace("_", " "))}</strong></span>'
+            f'<span>{total_s:.1f}s</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
-    st.markdown(
-        f'<div class="viavsr-transcript">{html.escape(transcript)}</div>',
-        unsafe_allow_html=True,
-    )
+        st.markdown(
+            f'<div class="viavsr-transcript-wrap">'
+            f'<p class="viavsr-transcript">{html.escape(transcript)}</p>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
-    metric_cols = st.columns(4)
-    metric_cols[0].metric("Tổng", f"{total_s:.1f}s")
-    metric_cols[1].metric("Modality", mode.replace("_", " "))
-    metric_cols[2].metric("Model", f"{timings.get('model_loading', 0):.1f}s")
-    metric_cols[3].metric("Inference", f"{timings.get('inference', 0):.1f}s")
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("Tổng", f"{total_s:.1f}s")
+        metric_cols[1].metric("Modality", mode.replace("_", " "))
+        metric_cols[2].metric("Model", f"{timings.get('model_loading', 0):.1f}s")
+        metric_cols[3].metric("Inference", f"{timings.get('inference', 0):.1f}s")
 
-    step_keys = ("face_tracking", "mouth_roi", "model_loading", "inference")
-    step_parts = [
-        f"{key.replace('_', ' ')}: {timings[key]:.1f}s"
-        for key in step_keys
-        if key in timings and timings[key]
-    ]
-    if step_parts:
-        st.caption(" · ".join(step_parts))
+        step_keys = ("face_tracking", "mouth_roi", "model_loading", "inference")
+        step_parts = [
+            f"{key.replace('_', ' ')}: {timings[key]:.1f}s"
+            for key in step_keys
+            if key in timings and timings[key]
+        ]
+        if step_parts:
+            st.caption(" · ".join(step_parts))
 
-    mouth = artifacts.get("mouth_roi")
-    if mouth and Path(mouth).is_file():
-        with st.expander("Video miệng"):
-            st.video(mouth)
+        mouth = artifacts.get("mouth_roi")
+        if mouth and Path(mouth).is_file():
+            with st.expander("Video miệng"):
+                st.video(mouth)
 
-    warnings = result.get("warnings") or []
-    if warnings:
-        st.warning("\n".join(str(item) for item in warnings))
-    if status != "passed" and result.get("error"):
-        st.error(result["error"].get("message", "Inference failed"))
+        warnings = result.get("warnings") or []
+        if warnings:
+            st.warning("\n".join(str(item) for item in warnings))
+        if status != "passed" and result.get("error"):
+            st.error(result["error"].get("message", "Inference failed"))
 
-    with st.expander("Báo cáo JSON"):
-        st.json(result)
+        with st.expander("Báo cáo JSON"):
+            st.json(result)
